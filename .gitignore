@@ -1,0 +1,18 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+*.swp
+
+# Claude Code local settings
+.claude/
+
+# Backend (mirrored di backend/.gitignore)
+*.db
+.env
+
+# Frontend (mirrored di frontend/.gitignore)
+node_modules/
+dist/
