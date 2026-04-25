@@ -82,6 +82,10 @@ async def process_endpoint(
     file: Optional[UploadFile] = File(None),
     source_url: Optional[str] = Form(None),
     aspect: str = Form("original"),
+    crop_x: Optional[int] = Form(None),
+    crop_y: Optional[int] = Form(None),
+    crop_w: Optional[int] = Form(None),
+    crop_h: Optional[int] = Form(None),
     flip: Optional[str] = Form(None),
     grayscale: bool = Form(False),
     max_width: Optional[int] = Form(None),
@@ -108,9 +112,14 @@ async def process_endpoint(
     if not img_bytes:
         raise HTTPException(status_code=400, detail="Input gambar kosong.")
 
+    crop_box = None
+    if all(v is not None for v in (crop_x, crop_y, crop_w, crop_h)):
+        crop_box = (crop_x, crop_y, crop_w, crop_h)
+
     try:
         out_bytes, content_type = process_image(
             img_bytes,
+            crop_box=crop_box,
             aspect=aspect,
             flip=(flip or None),
             grayscale=grayscale,

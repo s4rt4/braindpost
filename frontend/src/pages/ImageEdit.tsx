@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type SyntheticEvent, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -28,6 +28,8 @@ import {
   IconWand,
 } from '@tabler/icons-react';
 import { useSearchParams } from 'react-router-dom';
+import ReactCrop, { type Crop, type PixelCrop } from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
 
 const ASPECT_OPTIONS = [
   { value: 'original', label: 'Asli' },
@@ -38,6 +40,16 @@ const ASPECT_OPTIONS = [
   { value: '4:3', label: '4:3' },
   { value: '3:2', label: '3:2' },
 ];
+
+const ASPECT_TO_NUM: Record<string, number | undefined> = {
+  original: undefined,
+  '1:1': 1,
+  '16:9': 16 / 9,
+  '9:16': 9 / 16,
+  '4:5': 4 / 5,
+  '4:3': 4 / 3,
+  '3:2': 3 / 2,
+};
 
 const FORMAT_OPTIONS = [
   { value: 'webp', label: 'WebP' },
@@ -51,6 +63,46 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/**
+ * Hitung crop default yang BENAR-BENAR fit di dalam image dengan aspect terkunci.
+ * Mengisi 90% dari dimensi yang membatasi (width / height).
+ *
+ * react-image-crop's makeAspectCrop tidak auto-clamp — kalau aspect tidak fit,
+ * dia bisa keluar dari batas image (mis: crop 1:1 di landscape → height 160%).
+ */
+function buildCenterCrop(
+  aspectNum: number | undefined,
+  imgW: number,
+  imgH: number,
+): Crop | undefined {
+  if (!aspectNum || imgW <= 0 || imgH <= 0) return undefined;
+
+  const mediaAspect = imgW / imgH;
+  let cropPxW: number;
+  let cropPxH: number;
+
+  if (aspectNum >= mediaAspect) {
+    // Crop lebih landscape (atau sama) dari media → batasi pakai width
+    cropPxW = imgW * 0.9;
+    cropPxH = cropPxW / aspectNum;
+  } else {
+    // Crop lebih potret dari media → batasi pakai height
+    cropPxH = imgH * 0.9;
+    cropPxW = cropPxH * aspectNum;
+  }
+
+  const widthPct = (cropPxW / imgW) * 100;
+  const heightPct = (cropPxH / imgH) * 100;
+
+  return {
+    unit: '%',
+    width: widthPct,
+    height: heightPct,
+    x: (100 - widthPct) / 2,
+    y: (100 - heightPct) / 2,
+  };
 }
 
 export default function ImageEdit() {
@@ -74,8 +126,12 @@ export default function ImageEdit() {
   const [quality, setQuality] = useState(85);
 
   const [urlInput, setUrlInput] = useState(initialUrl ?? '');
+  const [crop, setCrop] = useState<Crop | undefined>();
+  const [completedCrop, setCompletedCrop] = useState<PixelCrop | undefined>();
+
   const inputUrlRef = useRef<string | null>(null);
   const outputUrlRef = useRef<string | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   function setInputFromBlob(blob: Blob, name = 'image') {
     if (inputUrlRef.current) URL.revokeObjectURL(inputUrlRef.current);
@@ -91,6 +147,8 @@ export default function ImageEdit() {
     setInputName(name);
     setOutputUrl(null);
     setOutputSize(0);
+    setCrop(undefined);
+    setCompletedCrop(undefined);
   }
 
   async function loadFromUrl(url: string) {
@@ -104,14 +162,13 @@ export default function ImageEdit() {
       const blob = await resp.blob();
       const guessedName = url.split('/').pop()?.split('?')[0] || 'image';
       setInputFromBlob(blob, guessedName);
-    } catch (e) {
+    } catch {
       notifications.show({
         color: 'red',
         title: 'Gagal load URL',
         message:
-          'Mungkin CORS-blocked. Coba upload manual, atau biarkan server fetch saat Process (kosongkan file).',
+          'Mungkin CORS-blocked. Coba upload manual, atau kosongkan file dan klik Process — server akan fetch URL.',
       });
-      // fallback: clear file blob, keep urlInput so server fetches at process time
       setInputBlob(null);
       setInputPreview(null);
       setInputSize(0);
@@ -129,13 +186,32 @@ export default function ImageEdit() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialUrl]);
 
-  // Cleanup blob URLs on unmount
   useEffect(() => {
     return () => {
       if (inputUrlRef.current) URL.revokeObjectURL(inputUrlRef.current);
       if (outputUrlRef.current) URL.revokeObjectURL(outputUrlRef.current);
     };
   }, []);
+
+  function onImageLoad(e: SyntheticEvent<HTMLImageElement>) {
+    const { width, height } = e.currentTarget;
+    const aspectNum = ASPECT_TO_NUM[aspect];
+    setCrop(buildCenterCrop(aspectNum, width, height));
+    setCompletedCrop(undefined);
+  }
+
+  // Saat aspect berubah, recompute crop default ke center 90%
+  useEffect(() => {
+    if (!imgRef.current) return;
+    const aspectNum = ASPECT_TO_NUM[aspect];
+    const { width, height } = imgRef.current;
+    if (!aspectNum) {
+      setCrop(undefined);
+      setCompletedCrop(undefined);
+      return;
+    }
+    setCrop(buildCenterCrop(aspectNum, width, height));
+  }, [aspect]);
 
   async function runProcess() {
     if (!inputBlob && !urlInput.trim()) {
@@ -158,7 +234,21 @@ export default function ImageEdit() {
     } else {
       fd.append('source_url', urlInput);
     }
-    fd.append('aspect', aspect);
+
+    // Crop: kirim pixel coords kalau ada region terpilih.
+    // Else fallback ke aspect (untuk URL-only, server-fetch flow tanpa preview).
+    if (completedCrop && imgRef.current && completedCrop.width > 0) {
+      const img = imgRef.current;
+      const scaleX = img.naturalWidth / img.width;
+      const scaleY = img.naturalHeight / img.height;
+      fd.append('crop_x', String(Math.round(completedCrop.x * scaleX)));
+      fd.append('crop_y', String(Math.round(completedCrop.y * scaleY)));
+      fd.append('crop_w', String(Math.round(completedCrop.width * scaleX)));
+      fd.append('crop_h', String(Math.round(completedCrop.height * scaleY)));
+    } else {
+      fd.append('aspect', aspect);
+    }
+
     if (flip) fd.append('flip', flip);
     fd.append('grayscale', String(grayscale));
     if (maxWidth && Number(maxWidth) > 0) fd.append('max_width', String(maxWidth));
@@ -214,22 +304,30 @@ export default function ImageEdit() {
       ? Math.round((1 - outputSize / inputSize) * 100)
       : null;
 
+  const aspectNum = ASPECT_TO_NUM[aspect];
+  const livePreviewStyle: React.CSSProperties = {
+    maxWidth: '100%',
+    height: 'auto',
+    display: 'block',
+    filter: grayscale ? 'grayscale(100%)' : undefined,
+  };
+
   return (
     <Stack gap="lg">
       <div>
         <Title order={2}>Image Edit</Title>
         <Text c="dimmed" size="sm">
-          Crop, flip, grayscale, convert ke WebP/PNG/JPEG, dan kompres.
+          Crop draggable, flip, grayscale, convert ke WebP/PNG/JPEG, dan kompres.
         </Text>
       </div>
 
       <Grid gutter="md">
-        {/* INPUT */}
-        <Grid.Col span={{ base: 12, md: 5 }}>
+        {/* INPUT + LIVE PREVIEW */}
+        <Grid.Col span={{ base: 12, md: 6 }}>
           <Card withBorder shadow="xs" radius="md">
             <Stack gap="sm">
               <Text fw={600} size="sm">
-                INPUT
+                INPUT & LIVE PREVIEW
               </Text>
               <FileInput
                 placeholder="Upload gambar dari disk"
@@ -255,16 +353,55 @@ export default function ImageEdit() {
 
               {inputPreview ? (
                 <>
-                  <MantineImage
-                    src={inputPreview}
-                    alt="Input"
-                    fit="contain"
-                    mah={300}
-                    radius="md"
-                  />
-                  <Group gap="xs">
+                  <div
+                    style={{
+                      maxHeight: 520,
+                      overflow: 'auto',
+                      display: 'flex',
+                      justifyContent: 'center',
+                      background: 'var(--mantine-color-default-hover)',
+                      borderRadius: 8,
+                      padding: 4,
+                    }}
+                  >
+                    <ReactCrop
+                      crop={crop}
+                      onChange={(_pix, percent) => setCrop(percent)}
+                      onComplete={(c) => setCompletedCrop(c)}
+                      aspect={aspectNum}
+                      keepSelection
+                    >
+                      <img
+                        ref={imgRef}
+                        src={inputPreview}
+                        alt="Input"
+                        onLoad={onImageLoad}
+                        style={livePreviewStyle}
+                      />
+                    </ReactCrop>
+                  </div>
+                  <Group gap="xs" wrap="wrap">
                     <Badge color="gray">{inputName}</Badge>
                     <Badge variant="light">{fmtBytes(inputSize)}</Badge>
+                    {imgRef.current && (
+                      <Badge variant="light" color="blue">
+                        {imgRef.current.naturalWidth}×{imgRef.current.naturalHeight}
+                      </Badge>
+                    )}
+                    {completedCrop && completedCrop.width > 0 && imgRef.current && (
+                      <Badge variant="light" color="orange">
+                        crop:{' '}
+                        {Math.round(
+                          completedCrop.width *
+                            (imgRef.current.naturalWidth / imgRef.current.width),
+                        )}
+                        ×
+                        {Math.round(
+                          completedCrop.height *
+                            (imgRef.current.naturalHeight / imgRef.current.height),
+                        )}
+                      </Badge>
+                    )}
                   </Group>
                 </>
               ) : (
@@ -280,7 +417,7 @@ export default function ImageEdit() {
         </Grid.Col>
 
         {/* OPERATIONS */}
-        <Grid.Col span={{ base: 12, md: 7 }}>
+        <Grid.Col span={{ base: 12, md: 6 }}>
           <Card withBorder shadow="xs" radius="md">
             <Stack gap="md">
               <Text fw={600} size="sm">
@@ -289,7 +426,7 @@ export default function ImageEdit() {
 
               <div>
                 <Text size="sm" mb={6} fw={500}>
-                  Crop (center crop ke aspect ratio)
+                  Crop — drag/resize box di preview kiri
                 </Text>
                 <SegmentedControl
                   value={aspect}
@@ -298,11 +435,18 @@ export default function ImageEdit() {
                   fullWidth
                   size="xs"
                 />
+                <Text size="xs" c="dimmed" mt={4}>
+                  &quot;Asli&quot; = tidak crop. Ratio lain = box dengan aspect
+                  ratio terkunci.
+                </Text>
               </div>
 
               <div>
                 <Text size="sm" mb={6} fw={500}>
-                  Flip
+                  Flip{' '}
+                  <Text component="span" size="xs" c="dimmed">
+                    (diterapkan setelah crop saat Process)
+                  </Text>
                 </Text>
                 <Group gap="xs">
                   <Button
@@ -329,7 +473,7 @@ export default function ImageEdit() {
               </div>
 
               <Switch
-                label="Konversi ke grayscale"
+                label="Konversi ke grayscale (live preview)"
                 checked={grayscale}
                 onChange={(e) => setGrayscale(e.currentTarget.checked)}
               />
@@ -423,7 +567,7 @@ export default function ImageEdit() {
       {!outputUrl && (
         <Alert color="blue" variant="light">
           💡 Tip: kalau load URL gagal karena CORS, kosongkan file input dan klik
-          Process — server akan fetch URL-nya untuk kamu.
+          Process — server akan fetch URL untuk kamu (tapi tanpa live crop preview).
         </Alert>
       )}
     </Stack>

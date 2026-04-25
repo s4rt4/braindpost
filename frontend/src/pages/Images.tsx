@@ -350,14 +350,35 @@ export default function Images() {
                 </Menu.Dropdown>
               </Menu>
 
-              <Button
-                component={Link}
-                to={`/image-edit?url=${encodeURIComponent(active.url)}`}
-                variant="light"
-                leftSection={<IconWand size={16} />}
-              >
-                Edit
-              </Button>
+              <Menu shadow="md" position="bottom-start">
+                <Menu.Target>
+                  <Button
+                    variant="light"
+                    leftSection={<IconWand size={16} />}
+                    rightSection={<IconChevronDown size={14} />}
+                  >
+                    Edit
+                  </Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>Pilih ukuran base untuk edit</Menu.Label>
+                  {active.sizes.map((s) => (
+                    <Menu.Item
+                      key={s.label}
+                      component={Link}
+                      to={`/image-edit?url=${encodeURIComponent(s.url)}`}
+                      onClick={closeViewer}
+                    >
+                      {s.label}
+                      {s.width > 0 && (
+                        <Text component="span" size="xs" c="dimmed" ml={6}>
+                          {s.width}px
+                        </Text>
+                      )}
+                    </Menu.Item>
+                  ))}
+                </Menu.Dropdown>
+              </Menu>
               <Button
                 component="a"
                 href={active.source_url}

@@ -38,6 +38,7 @@ def _center_crop(img: Image.Image, target_ratio: float) -> Image.Image:
 def process(
     img_bytes: bytes,
     *,
+    crop_box: Optional[tuple[int, int, int, int]] = None,
     aspect: str = "original",
     flip: Optional[str] = None,
     grayscale: bool = False,
@@ -62,10 +63,18 @@ def process(
     if img.mode == "P":
         img = img.convert("RGBA" if "transparency" in img.info else "RGB")
 
-    # Crop center to ratio
-    target_ratio = ASPECT_RATIOS[aspect]
-    if target_ratio:
-        img = _center_crop(img, target_ratio)
+    # Crop: explicit pixel coords (dari frontend cropper) > aspect-based center crop
+    if crop_box is not None:
+        x, y, w, h = crop_box
+        x = max(0, min(x, img.width))
+        y = max(0, min(y, img.height))
+        w = max(1, min(w, img.width - x))
+        h = max(1, min(h, img.height - y))
+        img = img.crop((x, y, x + w, y + h))
+    else:
+        target_ratio = ASPECT_RATIOS[aspect]
+        if target_ratio:
+            img = _center_crop(img, target_ratio)
 
     # Flip
     if flip == "horizontal":
