@@ -28,15 +28,21 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  IconAlertTriangle,
   IconCheck,
   IconCloud,
   IconCloudCheck,
   IconCopy,
   IconDeviceFloppy,
+  IconDownload,
   IconEye,
   IconLayoutColumns,
+  IconLink,
   IconPencil,
+  IconPhoto,
   IconPlus,
+  IconSearch,
+  IconShieldCheck,
   IconSparkles,
   IconTrash,
 } from '@tabler/icons-react';
@@ -290,6 +296,194 @@ export default function Drafts() {
 
   // Markdown preview view mode (#3)
   const [viewMode, setViewMode] = useState<'edit' | 'preview' | 'split'>('edit');
+
+  // M2 — YMYL policy check
+  const [policyOpened, { open: openPolicy, close: closePolicy }] = useDisclosure(false);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [policyResult, setPolicyResult] = useState<{
+    patterns: Array<{
+      category: string;
+      excerpt: string;
+      note: string;
+      suggested_disclaimer: string;
+    }>;
+    summary: string;
+  } | null>(null);
+
+  // M4 — Internal link suggestions
+  const [linksOpened, { open: openLinks, close: closeLinks }] = useDisclosure(false);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [linkSuggestions, setLinkSuggestions] = useState<
+    Array<{
+      draft_id: number;
+      title: string;
+      score: number;
+      suggested_anchor: string;
+      slug: string;
+    }>
+  >([]);
+
+  // #8 — SEO snippet
+  const [seoOpened, { open: openSeo, close: closeSeo }] = useDisclosure(false);
+  const [seoLoading, setSeoLoading] = useState(false);
+  const [seoResult, setSeoResult] = useState<{
+    meta_title: string;
+    meta_description: string;
+    slug: string;
+    keywords: string[];
+  } | null>(null);
+
+  // Bonus — Featured image picker
+  const [imgPickerOpened, { open: openImgPicker, close: closeImgPicker }] = useDisclosure(false);
+  const [imgQuery, setImgQuery] = useState('');
+  const [imgLoading, setImgLoading] = useState(false);
+  const [imgResults, setImgResults] = useState<
+    Array<{
+      id: string;
+      provider: string;
+      url: string;
+      thumb: string;
+      photographer: string;
+      alt: string;
+    }>
+  >([]);
+
+  // ===== Handlers =====
+
+  async function runPolicyCheck() {
+    if (!selected) return;
+    openPolicy();
+    setPolicyLoading(true);
+    setPolicyResult(null);
+    try {
+      const data = await apiPost<typeof policyResult>(
+        `/drafts/${selected.id}/policy-check`,
+        {},
+      );
+      setPolicyResult(data);
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Policy check gagal',
+        message: e instanceof Error ? e.message : 'unknown',
+      });
+      closePolicy();
+    } finally {
+      setPolicyLoading(false);
+    }
+  }
+
+  async function runLinkSuggestions() {
+    if (!selected) return;
+    openLinks();
+    setLinksLoading(true);
+    try {
+      const data = await apiGet<{ suggestions: typeof linkSuggestions }>(
+        `/drafts/${selected.id}/link-suggestions?limit=8`,
+      );
+      setLinkSuggestions(data.suggestions);
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Saran link gagal',
+        message: e instanceof Error ? e.message : 'unknown',
+      });
+    } finally {
+      setLinksLoading(false);
+    }
+  }
+
+  async function runSeoGen() {
+    if (!selected) return;
+    openSeo();
+    setSeoLoading(true);
+    setSeoResult(null);
+    try {
+      const data = await apiPost<typeof seoResult>(
+        `/drafts/${selected.id}/seo`,
+        {},
+      );
+      setSeoResult(data);
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Generate SEO gagal',
+        message: e instanceof Error ? e.message : 'unknown',
+      });
+      closeSeo();
+    } finally {
+      setSeoLoading(false);
+    }
+  }
+
+  function exportMarkdown() {
+    if (!contentMd.trim()) {
+      notifications.show({ color: 'yellow', message: 'Konten kosong.' });
+      return;
+    }
+    const front = `---\ntitle: ${title}\nstatus: ${status}\ncontent_type: ${contentType}\ntone: ${tone}\nupdated_at: ${
+      selected?.updated_at ?? new Date().toISOString()
+    }\n---\n\n# ${title}\n\n`;
+    const body = front + contentMd;
+    const blob = new Blob([body], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const slug =
+      title
+        .replace(/[^a-z0-9]+/gi, '-')
+        .toLowerCase()
+        .replace(/^-+|-+$/g, '') || `draft-${selected?.id ?? 'baru'}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slug}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    notifications.show({ color: 'teal', message: `Exported: ${slug}.md` });
+  }
+
+  async function searchImages(query?: string) {
+    const q = (query ?? imgQuery).trim();
+    if (!q) {
+      notifications.show({ color: 'yellow', message: 'Ketik kata kunci dulu.' });
+      return;
+    }
+    setImgLoading(true);
+    try {
+      const data = await apiGet<{ results: typeof imgResults }>(
+        `/images/search?q=${encodeURIComponent(q)}&provider=all&page=1&per_page=12`,
+      );
+      setImgResults(data.results);
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Cari gambar gagal',
+        message: e instanceof Error ? e.message : 'unknown',
+      });
+    } finally {
+      setImgLoading(false);
+    }
+  }
+
+  function insertImage(item: (typeof imgResults)[number]) {
+    const altText = item.alt || `Foto oleh ${item.photographer} via ${item.provider}`;
+    const imgMd = `\n\n![${altText}](${item.url})\n*Foto: ${item.photographer} via ${item.provider}*\n\n`;
+    setContentMd(contentMd + imgMd);
+    notifications.show({
+      color: 'teal',
+      message: `Gambar dari ${item.photographer} disisipkan di akhir konten.`,
+    });
+    closeImgPicker();
+  }
+
+  function insertLinkAtEnd(suggestion: (typeof linkSuggestions)[number]) {
+    const linkMd = ` [${suggestion.suggested_anchor}](/${suggestion.slug})`;
+    setContentMd(contentMd + linkMd);
+    notifications.show({
+      color: 'teal',
+      message: `Link "${suggestion.title}" disisipkan di akhir konten.`,
+    });
+  }
 
   function computeSig(values: {
     title: string;
@@ -1038,6 +1232,62 @@ export default function Drafts() {
                       );
                     })()}
 
+                    {/* Pre-publish toolkit (M2 + M4 + #8 + #12 + Bonus img picker) */}
+                    <Card withBorder radius="md" p="sm">
+                      <Group justify="space-between" mb="xs">
+                        <Text size="sm" fw={600}>
+                          🛠️ Pre-publish Toolkit
+                        </Text>
+                      </Group>
+                      <Group gap="xs" wrap="wrap">
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="orange"
+                          leftSection={<IconShieldCheck size={14} />}
+                          onClick={runPolicyCheck}
+                        >
+                          Cek Pola YMYL
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="blue"
+                          leftSection={<IconLink size={14} />}
+                          onClick={runLinkSuggestions}
+                        >
+                          Saran Internal Link
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="grape"
+                          leftSection={<IconSearch size={14} />}
+                          onClick={runSeoGen}
+                        >
+                          SEO Snippet
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="teal"
+                          leftSection={<IconPhoto size={14} />}
+                          onClick={openImgPicker}
+                        >
+                          Sisipkan Image
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="gray"
+                          leftSection={<IconDownload size={14} />}
+                          onClick={exportMarkdown}
+                        >
+                          Export .md
+                        </Button>
+                      </Group>
+                    </Card>
+
                     <Group>
                       <Button
                         onClick={saveDraft}
@@ -1081,6 +1331,300 @@ export default function Drafts() {
             Hapus
           </Button>
         </Group>
+      </Modal>
+
+      {/* M2 — YMYL Policy Check Modal */}
+      <Modal
+        opened={policyOpened}
+        onClose={closePolicy}
+        title="Cek Pola YMYL (Your Money Your Life)"
+        size="lg"
+        centered
+      >
+        <Alert color="blue" variant="light" mb="md" icon={<IconAlertTriangle size={16} />}>
+          <Text size="xs">
+            Ini <b>deteksi pola</b>, bukan verdict aman/tidak. AI tidak bisa menggantikan
+            review manual untuk policy AdSense. Pakai sebagai checklist, bukan keputusan final.
+          </Text>
+        </Alert>
+        {policyLoading ? (
+          <Group justify="center" p="xl">
+            <Loader />
+          </Group>
+        ) : policyResult ? (
+          <Stack gap="md">
+            <Card withBorder p="sm">
+              <Text size="sm" fw={600} c="dimmed" mb={4}>
+                Ringkasan
+              </Text>
+              <Text size="sm">{policyResult.summary}</Text>
+            </Card>
+            {policyResult.patterns.length === 0 ? (
+              <Alert color="green" variant="light">
+                ✅ Tidak ada pola YMYL terdeteksi.
+              </Alert>
+            ) : (
+              policyResult.patterns.map((p, i) => (
+                <Card key={i} withBorder p="sm">
+                  <Group gap="xs" mb={4}>
+                    <Badge
+                      color={
+                        p.category === 'medical'
+                          ? 'red'
+                          : p.category === 'financial'
+                            ? 'orange'
+                            : p.category === 'legal'
+                              ? 'grape'
+                              : 'yellow'
+                      }
+                      variant="filled"
+                    >
+                      {p.category}
+                    </Badge>
+                  </Group>
+                  <Text size="sm" fs="italic" c="dimmed" mb={4}>
+                    "{p.excerpt}"
+                  </Text>
+                  <Text size="sm" mb="sm">
+                    {p.note}
+                  </Text>
+                  <Card withBorder bg="var(--mantine-color-default-hover)" p="xs">
+                    <Group justify="space-between" gap="xs" wrap="nowrap" align="flex-start">
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Text size="xs" fw={600} c="dimmed">
+                          Saran disclaimer:
+                        </Text>
+                        <Text size="sm">{p.suggested_disclaimer}</Text>
+                      </div>
+                      <CopyButton value={p.suggested_disclaimer} timeout={1500}>
+                        {({ copied, copy }) => (
+                          <ActionIcon variant="subtle" onClick={copy}>
+                            {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+                          </ActionIcon>
+                        )}
+                      </CopyButton>
+                    </Group>
+                  </Card>
+                </Card>
+              ))
+            )}
+          </Stack>
+        ) : null}
+      </Modal>
+
+      {/* M4 — Internal Link Suggestions Modal */}
+      <Modal
+        opened={linksOpened}
+        onClose={closeLinks}
+        title="Saran Internal Link"
+        size="lg"
+        centered
+      >
+        {linksLoading ? (
+          <Group justify="center" p="xl">
+            <Loader />
+          </Group>
+        ) : linkSuggestions.length === 0 ? (
+          <Alert color="gray" variant="light">
+            Belum ada saran. Bikin draft lain dulu di niche yang serupa, atau pastikan
+            draft kamu punya konten yang cukup untuk matching.
+          </Alert>
+        ) : (
+          <Stack gap="xs">
+            <Text size="xs" c="dimmed">
+              Klik <b>Sisipkan</b> untuk append link markdown di akhir konten. Slug
+              ditebak dari judul; sesuaikan dengan struktur URL blog kamu sebelum publish.
+            </Text>
+            {linkSuggestions.map((s) => (
+              <Card key={s.draft_id} withBorder p="sm">
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text size="sm" fw={500} lineClamp={2}>
+                      {s.title}
+                    </Text>
+                    <Group gap={6} mt={2}>
+                      <Badge size="xs" variant="light" color="gray">
+                        match {(s.score * 100).toFixed(0)}%
+                      </Badge>
+                      <Text size="xs" c="dimmed">
+                        /{s.slug}
+                      </Text>
+                    </Group>
+                  </div>
+                  <Group gap={4}>
+                    <CopyButton value={`[${s.suggested_anchor}](/${s.slug})`} timeout={1500}>
+                      {({ copied, copy }) => (
+                        <Tooltip label={copied ? 'Tersalin!' : 'Copy markdown link'}>
+                          <ActionIcon variant="subtle" onClick={copy}>
+                            {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </CopyButton>
+                    <Button size="compact-xs" onClick={() => insertLinkAtEnd(s)}>
+                      Sisipkan
+                    </Button>
+                  </Group>
+                </Group>
+              </Card>
+            ))}
+          </Stack>
+        )}
+      </Modal>
+
+      {/* #8 — SEO Snippet Modal */}
+      <Modal
+        opened={seoOpened}
+        onClose={closeSeo}
+        title="SEO Snippet"
+        size="lg"
+        centered
+      >
+        {seoLoading ? (
+          <Group justify="center" p="xl">
+            <Loader />
+          </Group>
+        ) : seoResult ? (
+          <Stack gap="md">
+            {[
+              {
+                label: 'Meta Title',
+                value: seoResult.meta_title,
+                limit: 60,
+              },
+              {
+                label: 'Meta Description',
+                value: seoResult.meta_description,
+                limit: 160,
+              },
+              {
+                label: 'URL Slug',
+                value: seoResult.slug,
+              },
+            ].map((f) => (
+              <div key={f.label}>
+                <Group justify="space-between" mb={4}>
+                  <Text size="sm" fw={600}>
+                    {f.label}
+                  </Text>
+                  <Group gap={6}>
+                    {f.limit && (
+                      <Badge
+                        size="xs"
+                        color={f.value.length <= f.limit ? 'green' : 'red'}
+                        variant="light"
+                      >
+                        {f.value.length}/{f.limit}
+                      </Badge>
+                    )}
+                    <CopyButton value={f.value} timeout={1500}>
+                      {({ copied, copy }) => (
+                        <ActionIcon variant="subtle" onClick={copy} size="sm">
+                          {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+                        </ActionIcon>
+                      )}
+                    </CopyButton>
+                  </Group>
+                </Group>
+                <Card withBorder p="xs" bg="var(--mantine-color-default-hover)">
+                  <Text size="sm">{f.value}</Text>
+                </Card>
+              </div>
+            ))}
+            <div>
+              <Text size="sm" fw={600} mb={4}>
+                Keywords
+              </Text>
+              <Group gap={6}>
+                {seoResult.keywords.map((k) => (
+                  <Badge key={k} variant="light" color="grape">
+                    {k}
+                  </Badge>
+                ))}
+              </Group>
+            </div>
+          </Stack>
+        ) : null}
+      </Modal>
+
+      {/* Bonus — Featured Image Picker Modal */}
+      <Modal
+        opened={imgPickerOpened}
+        onClose={closeImgPicker}
+        title="Sisipkan Image ke Konten"
+        size="xl"
+        centered
+      >
+        <Stack gap="md">
+          <Group gap="xs" wrap="nowrap">
+            <TextInput
+              placeholder="Cari di Pexels / Unsplash / Pixabay..."
+              value={imgQuery}
+              onChange={(e) => setImgQuery(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  searchImages();
+                }
+              }}
+              style={{ flex: 1 }}
+              leftSection={<IconSearch size={14} />}
+            />
+            <Button onClick={() => searchImages()} loading={imgLoading}>
+              Cari
+            </Button>
+          </Group>
+          {imgResults.length > 0 && (
+            <Grid gutter="xs">
+              {imgResults.map((item) => (
+                <Grid.Col key={`${item.provider}-${item.id}`} span={{ base: 6, sm: 4 }}>
+                  <Card
+                    withBorder
+                    padding={0}
+                    radius="sm"
+                    style={{ cursor: 'pointer', overflow: 'hidden' }}
+                    onClick={() => insertImage(item)}
+                  >
+                    <div style={{ position: 'relative', aspectRatio: '4/3' }}>
+                      <img
+                        src={item.thumb}
+                        alt={item.alt}
+                        loading="lazy"
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          display: 'block',
+                        }}
+                      />
+                      <Badge
+                        size="xs"
+                        color={
+                          item.provider === 'pexels'
+                            ? 'teal'
+                            : item.provider === 'unsplash'
+                              ? 'dark'
+                              : 'green'
+                        }
+                        style={{ position: 'absolute', top: 4, right: 4 }}
+                      >
+                        {item.provider}
+                      </Badge>
+                    </div>
+                    <Text size="xs" c="dimmed" p={4} truncate>
+                      📷 {item.photographer || 'Unknown'}
+                    </Text>
+                  </Card>
+                </Grid.Col>
+              ))}
+            </Grid>
+          )}
+          {imgResults.length === 0 && !imgLoading && (
+            <Text size="sm" c="dimmed" ta="center" py="md">
+              Cari kata kunci → klik gambar untuk sisipkan markdown ke akhir konten.
+            </Text>
+          )}
+        </Stack>
       </Modal>
     </Stack>
   );

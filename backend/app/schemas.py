@@ -63,6 +63,44 @@ class DraftListItem(BaseModel):
     updated_at: datetime
 
 
+# ===== M2 YMYL/Policy Pattern Detection =====
+
+class PolicyPattern(BaseModel):
+    category: str  # medical | financial | legal | safety
+    excerpt: str
+    note: str
+    suggested_disclaimer: str
+
+
+class PolicyCheckResponse(BaseModel):
+    patterns: list[PolicyPattern]
+    summary: str
+
+
+# ===== M4 Internal Linking Suggestions =====
+
+class LinkSuggestion(BaseModel):
+    draft_id: int
+    title: str
+    score: float
+    suggested_anchor: str
+    slug: str
+
+
+class LinkSuggestionsResponse(BaseModel):
+    source_id: int
+    suggestions: list[LinkSuggestion]
+
+
+# ===== #8 SEO Snippet =====
+
+class SeoSnippetResponse(BaseModel):
+    meta_title: str
+    meta_description: str
+    slug: str
+    keywords: list[str]
+
+
 # ===== Workflow =====
 
 class WorkflowProgressUpdate(BaseModel):
