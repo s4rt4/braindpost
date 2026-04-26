@@ -49,7 +49,18 @@ async def generate_ideas(req: IdeasRequest, db: Session = Depends(get_db)):
     db.add(session)
     db.commit()
     db.refresh(session)
-    return IdeasResponse(id=session.id, result=session.result, created_at=session.created_at)
+    return _to_response(session)
+
+
+def _to_response(s: IdeaSession) -> IdeasResponse:
+    return IdeasResponse(
+        id=s.id,
+        category=s.category,
+        audience=s.audience,
+        specific_topic=s.specific_topic,
+        result=s.result,
+        created_at=s.created_at,
+    )
 
 
 @router.get("/history", response_model=list[IdeasResponse])
@@ -60,4 +71,14 @@ def history(db: Session = Depends(get_db)):
         .limit(20)
         .all()
     )
-    return [IdeasResponse(id=r.id, result=r.result, created_at=r.created_at) for r in rows]
+    return [_to_response(r) for r in rows]
+
+
+@router.delete("/history/{session_id}")
+def delete_history(session_id: int, db: Session = Depends(get_db)):
+    s = db.query(IdeaSession).filter(IdeaSession.id == session_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="History tidak ditemukan.")
+    db.delete(s)
+    db.commit()
+    return {"deleted": session_id}

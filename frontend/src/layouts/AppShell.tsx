@@ -19,10 +19,12 @@ import {
   IconSettings,
   IconSun,
   IconSunMoon,
+  IconTarget,
   IconWand,
 } from '@tabler/icons-react';
 
 const NAV = [
+  { path: '/readiness', label: 'Readiness', icon: IconTarget },
   { path: '/workflow', label: 'Workflow', icon: IconRoute },
   { path: '/ideas', label: 'Ide Topik', icon: IconBulb },
   { path: '/drafts', label: 'Draft', icon: IconPencil },

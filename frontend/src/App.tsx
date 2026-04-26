@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from './layouts/AppShell';
+import Readiness from './pages/Readiness';
 import Workflow from './pages/Workflow';
 import Ideas from './pages/Ideas';
 import Drafts from './pages/Drafts';
@@ -12,7 +13,8 @@ export default function App() {
   return (
     <Routes>
       <Route element={<AppLayout />}>
-        <Route path="/" element={<Navigate to="/ideas" replace />} />
+        <Route path="/" element={<Navigate to="/readiness" replace />} />
+        <Route path="/readiness" element={<Readiness />} />
         <Route path="/workflow" element={<Workflow />} />
         <Route path="/ideas" element={<Ideas />} />
         <Route path="/drafts" element={<Drafts />} />

@@ -9,6 +9,9 @@ Thumbs.db
 # Claude Code local settings
 .claude/
 
+# Local-only docs
+FEATURES.md
+
 # Backend (mirrored di backend/.gitignore)
 *.db
 .env

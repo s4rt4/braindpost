@@ -27,6 +27,9 @@ class Draft(Base):
     tone: Mapped[str] = mapped_column(String(50), default="")
     content_type: Mapped[str] = mapped_column(String(50), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Workflow status: draft / revisi / siap_publish / published
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

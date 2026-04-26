@@ -15,6 +15,9 @@ class IdeasRequest(BaseModel):
 
 class IdeasResponse(BaseModel):
     id: int
+    category: str = ""
+    audience: str = ""
+    specific_topic: str = ""
     result: str
     created_at: datetime
 
@@ -34,6 +37,7 @@ class DraftUpdateRequest(BaseModel):
     tone: Optional[str] = None
     content_type: Optional[str] = None
     notes: Optional[str] = None
+    status: Optional[str] = None
 
 
 class DraftResponse(BaseModel):
@@ -43,6 +47,8 @@ class DraftResponse(BaseModel):
     content_type: str
     tone: str
     notes: str
+    status: str
+    published_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -52,6 +58,8 @@ class DraftListItem(BaseModel):
     title: str
     content_type: str
     tone: str
+    status: str
+    published_at: Optional[datetime] = None
     updated_at: datetime
 
 
@@ -135,3 +143,35 @@ class ImageSearchResponse(BaseModel):
     page: int
     results: list[ImageItem]
     errors: dict[str, str] = {}
+
+
+# ===== Readiness (M3 — AdSense Readiness Checklist) =====
+
+class ReadinessAutoStats(BaseModel):
+    published_count: int
+    published_target: int = 15
+    avg_word_count: int
+    avg_word_target: int = 800
+    consecutive_weeks: int
+    consecutive_target: int = 4
+
+
+class ReadinessManual(BaseModel):
+    about_page: bool = False
+    privacy_policy: bool = False
+    contact_page: bool = False
+    disclaimer_page: bool = False
+    own_domain: bool = False
+    blog_age_6_months: bool = False
+    no_policy_violations: bool = False
+
+
+class ReadinessResponse(BaseModel):
+    auto: ReadinessAutoStats
+    manual: ReadinessManual
+    overall_pct: int
+
+
+class ReadinessManualUpdate(BaseModel):
+    key: str
+    value: bool

@@ -36,6 +36,9 @@ Aturan:
 """
 
 
+ALLOWED_STATUSES = {"draft", "revisi", "siap_publish", "published"}
+
+
 def _to_response(d: Draft) -> DraftResponse:
     return DraftResponse(
         id=d.id,
@@ -44,6 +47,8 @@ def _to_response(d: Draft) -> DraftResponse:
         content_type=d.content_type,
         tone=d.tone,
         notes=d.notes,
+        status=d.status,
+        published_at=d.published_at,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )
@@ -90,6 +95,8 @@ def list_drafts(db: Session = Depends(get_db)):
             title=d.title,
             content_type=d.content_type,
             tone=d.tone,
+            status=d.status,
+            published_at=d.published_at,
             updated_at=d.updated_at,
         )
         for d in rows
@@ -112,7 +119,23 @@ def update_draft(
     if not d:
         raise HTTPException(status_code=404, detail="Draft tidak ditemukan.")
 
-    for field, value in req.model_dump(exclude_unset=True).items():
+    payload = req.model_dump(exclude_unset=True)
+
+    if "status" in payload:
+        if payload["status"] not in ALLOWED_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Status tidak valid: {payload['status']}. "
+                f"Pilihan: {sorted(ALLOWED_STATUSES)}",
+            )
+        # Auto-stamp published_at saat transisi pertama ke "published";
+        # clear kalau pindah ke status lain (supaya tidak misleading di Readiness counter).
+        if payload["status"] == "published" and d.status != "published":
+            d.published_at = datetime.utcnow()
+        elif payload["status"] != "published" and d.status == "published":
+            d.published_at = None
+
+    for field, value in payload.items():
         setattr(d, field, value)
     d.updated_at = datetime.utcnow()
     db.commit()
