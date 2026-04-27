@@ -13,7 +13,13 @@ import {
   Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconCheck, IconDeviceFloppy, IconKey } from '@tabler/icons-react';
+import {
+  IconCheck,
+  IconDeviceFloppy,
+  IconKey,
+  IconPlugConnected,
+  IconX,
+} from '@tabler/icons-react';
 import { apiGet, apiPut } from '../api/client';
 
 type SettingItem = {
@@ -111,6 +117,34 @@ export default function Settings() {
 
   const dirtyCount = Object.values(drafts).filter((v) => v !== '').length;
 
+  const [testingConnection, setTestingConnection] = useState(false);
+
+  async function testLaravelConnection() {
+    setTestingConnection(true);
+    try {
+      const result = await apiGet<{
+        ok: boolean;
+        status_code: number;
+        message: string;
+      }>('/publishing/laravel/test-connection');
+      notifications.show({
+        color: result.ok ? 'teal' : 'red',
+        icon: result.ok ? <IconCheck size={16} /> : <IconX size={16} />,
+        title: result.ok ? 'Connection OK' : 'Connection Failed',
+        message: result.message,
+        autoClose: 8000,
+      });
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Test gagal',
+        message: e instanceof Error ? e.message : 'unknown',
+      });
+    } finally {
+      setTestingConnection(false);
+    }
+  }
+
   if (loading) {
     return (
       <Group justify="center" p="xl">
@@ -131,6 +165,9 @@ export default function Settings() {
 
       {Object.entries(grouped).map(([category, categoryItems]) => {
         const anyActive = categoryItems.some((i) => i.active);
+        const isPublishing = category === 'Publishing';
+        const allPublishingSet =
+          isPublishing && categoryItems.every((i) => i.is_set);
         return (
           <Card key={category} withBorder shadow="xs" radius="md">
             <Group justify="space-between" mb="md">
@@ -138,9 +175,24 @@ export default function Settings() {
                 <IconKey size={16} />
                 <Text fw={600}>{category}</Text>
               </Group>
-              <Badge color={anyActive ? 'green' : 'gray'} variant="light" size="sm">
-                {anyActive ? 'Aktif' : 'Belum dipakai'}
-              </Badge>
+              <Group gap="xs">
+                {isPublishing && (
+                  <Button
+                    size="compact-xs"
+                    variant="light"
+                    color="blue"
+                    leftSection={<IconPlugConnected size={12} />}
+                    onClick={testLaravelConnection}
+                    loading={testingConnection}
+                    disabled={!allPublishingSet}
+                  >
+                    Test Connection
+                  </Button>
+                )}
+                <Badge color={anyActive ? 'green' : 'gray'} variant="light" size="sm">
+                  {anyActive ? 'Aktif' : 'Belum dipakai'}
+                </Badge>
+              </Group>
             </Group>
 
             <Stack gap="md">

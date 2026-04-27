@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import Draft
 from ..providers.llm.deepseek import llm
+from ..providers.publishing.laravel import laravel_publisher
 from ..schemas import (
     DraftGenerateRequest,
     DraftListItem,
@@ -17,6 +18,9 @@ from ..schemas import (
     LinkSuggestion,
     LinkSuggestionsResponse,
     PolicyCheckResponse,
+    PublishRequest,
+    PublishResponse,
+    PublishStatusResponse,
     SeoSnippetResponse,
 )
 
@@ -47,6 +51,12 @@ ALLOWED_STATUSES = {"draft", "revisi", "siap_publish", "published"}
 
 
 def _to_response(d: Draft) -> DraftResponse:
+    pub_meta = None
+    if d.publishing_meta:
+        try:
+            pub_meta = json.loads(d.publishing_meta)
+        except json.JSONDecodeError:
+            pub_meta = None
     return DraftResponse(
         id=d.id,
         title=d.title,
@@ -58,6 +68,10 @@ def _to_response(d: Draft) -> DraftResponse:
         published_at=d.published_at,
         created_at=d.created_at,
         updated_at=d.updated_at,
+        publishing_meta=pub_meta,
+        published_url=d.published_url,
+        laravel_post_id=d.laravel_post_id,
+        published_at_blog=d.published_at_blog,
     )
 
 
@@ -105,6 +119,7 @@ def list_drafts(db: Session = Depends(get_db)):
             status=d.status,
             published_at=d.published_at,
             updated_at=d.updated_at,
+            published_url=d.published_url,
         )
         for d in rows
     ]
@@ -127,6 +142,10 @@ def update_draft(
         raise HTTPException(status_code=404, detail="Draft tidak ditemukan.")
 
     payload = req.model_dump(exclude_unset=True)
+
+    # publishing_meta dikirim sebagai dict dari frontend, simpan sebagai JSON string
+    if "publishing_meta" in payload and payload["publishing_meta"] is not None:
+        payload["publishing_meta"] = json.dumps(payload["publishing_meta"], ensure_ascii=False)
 
     if "status" in payload:
         if payload["status"] not in ALLOWED_STATUSES:
@@ -355,3 +374,168 @@ async def generate_seo(draft_id: int, db: Session = Depends(get_db)):
             status_code=502,
             detail=f"AI response tidak bisa di-parse: {e}",
         )
+
+
+# ===== Publishing — Laravel Blog autopost =====
+
+def _load_meta(d: Draft) -> dict:
+    if not d.publishing_meta:
+        return {}
+    try:
+        return json.loads(d.publishing_meta)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _save_meta(d: Draft, meta: dict) -> None:
+    d.publishing_meta = json.dumps(meta, ensure_ascii=False)
+
+
+def _build_publish_payload(d: Draft) -> dict:
+    """Assemble payload sesuai BLOG_INTEGRATION.md section 4.2.
+
+    Field minimum: braindpost_id, title, content_md.
+    Sisanya derived dari publishing_meta atau auto-generated.
+    """
+    meta = _load_meta(d)
+
+    payload: dict = {
+        "braindpost_id": str(d.id),
+        "title": d.title,
+        "content_md": d.content_md,
+    }
+
+    # Optional metadata
+    if meta.get("category"):
+        payload["category"] = meta["category"]
+    if meta.get("tags"):
+        payload["tags"] = meta["tags"]
+    if meta.get("keywords"):
+        payload["keywords"] = meta["keywords"]
+    if meta.get("slug"):
+        payload["slug"] = meta["slug"]
+    if meta.get("meta_title"):
+        payload["meta_title"] = meta["meta_title"]
+    if meta.get("meta_description"):
+        payload["meta_description"] = meta["meta_description"]
+
+    # Featured image
+    fi = meta.get("featured_image") or {}
+    if fi.get("url"):
+        payload["featured_image_url"] = fi["url"]
+        if fi.get("alt"):
+            payload["featured_image_alt"] = fi["alt"]
+        # credit WAJIB kalau ada featured_image_url (Pexels TOS attribution)
+        credit = fi.get("credit")
+        if not credit and fi.get("photographer") and fi.get("provider"):
+            credit = f"Foto: {fi['photographer']} via {fi['provider'].capitalize()}"
+        payload["featured_image_credit"] = credit or "Sumber tidak disebutkan"
+
+    return payload
+
+
+@router.post("/{draft_id}/publish", response_model=PublishResponse)
+async def publish_to_blog(
+    draft_id: int, body: PublishRequest, db: Session = Depends(get_db)
+):
+    d = db.query(Draft).filter(Draft.id == draft_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Draft tidak ditemukan.")
+    if not d.content_md.strip():
+        raise HTTPException(status_code=400, detail="Konten kosong.")
+    if not d.title.strip():
+        raise HTTPException(status_code=400, detail="Judul kosong.")
+
+    payload = _build_publish_payload(d)
+
+    try:
+        resp = await laravel_publisher.create_or_update(payload, force=body.force)
+    except RuntimeError as e:
+        # Config missing
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Laravel publish error: {e}")
+
+    sc = resp.pop("_status_code", 0)
+
+    if sc == 409:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": resp.get(
+                    "message", "Artikel sudah published. Pakai force=true."
+                ),
+                "admin_url": resp.get("admin_url"),
+            },
+        )
+    if sc == 401:
+        raise HTTPException(
+            status_code=401, detail="Token Laravel tidak valid. Cek setting."
+        )
+    if sc not in (200, 201):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Laravel error {sc}: {resp.get('message') or resp.get('error') or resp}",
+        )
+
+    # Persist Laravel response ke Draft (untuk re-publish & tracking)
+    if "id" in resp:
+        d.laravel_post_id = int(resp["id"])
+    # Tidak set published_url di sini — itu di-set saat polling dapat status=published
+    # Tidak set published_at_blog di sini — sama
+    db.commit()
+    db.refresh(d)
+
+    return PublishResponse(
+        laravel_post_id=int(resp.get("id", 0)),
+        status=str(resp.get("status", "unknown")),
+        admin_url=str(resp.get("admin_url", "")),
+        public_url=resp.get("public_url"),
+        updated_fields=resp.get("updated_fields", []),
+        preserved_fields=resp.get("preserved_fields", []),
+        raw=resp,
+    )
+
+
+@router.get("/{draft_id}/publish-status", response_model=PublishStatusResponse)
+async def poll_publish_status(draft_id: int, db: Session = Depends(get_db)):
+    d = db.query(Draft).filter(Draft.id == draft_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Draft tidak ditemukan.")
+    if not d.laravel_post_id:
+        raise HTTPException(
+            status_code=400, detail="Draft belum pernah di-publish ke blog."
+        )
+
+    try:
+        resp = await laravel_publisher.get_status(d.laravel_post_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Polling error: {e}")
+
+    sc = resp.pop("_status_code", 0)
+    if sc != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Laravel polling error {sc}: {resp.get('message') or resp}",
+        )
+
+    # Update Draft kalau status berubah ke published
+    laravel_status = str(resp.get("status", ""))
+    if laravel_status == "published" and not d.published_url:
+        d.published_url = resp.get("public_url") or ""
+        d.published_at_blog = datetime.utcnow()
+        db.commit()
+        db.refresh(d)
+
+    return PublishStatusResponse(
+        laravel_post_id=d.laravel_post_id,
+        status=laravel_status,
+        processing_error=resp.get("processing_error"),
+        admin_url=resp.get("admin_url"),
+        public_url=resp.get("public_url"),
+        downloaded_images=resp.get("downloaded_images", 0),
+        total_images=resp.get("total_images", 0),
+        updated_at=resp.get("updated_at"),
+    )

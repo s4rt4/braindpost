@@ -35,6 +35,14 @@ class Draft(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    # === Laravel autopost (Sprint integrasi blog) ===
+    # JSON string: { category, tags, featured_image: {url, alt, photographer, provider, credit} }
+    publishing_meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Set saat publish ke Laravel sukses
+    published_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    laravel_post_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    published_at_blog: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
 
 class CalendarEntry(Base):
     __tablename__ = "calendar_entries"

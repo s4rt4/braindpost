@@ -8,17 +8,21 @@ from .api import (
     drafts,
     ideas,
     images,
+    publishing,
     readiness,
     settings as settings_api,
     workflow,
 )
 from .config import settings
-from .db import Base, engine
+from .db import Base, engine, run_lightweight_migrations
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    added = run_lightweight_migrations(engine)
+    if added:
+        print(f"[migration] added columns: {', '.join(added)}")
     yield
 
 
@@ -38,6 +42,7 @@ app.include_router(drafts.router, prefix="/api/drafts", tags=["drafts"])
 app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"])
 app.include_router(images.router, prefix="/api/images", tags=["images"])
 app.include_router(readiness.router, prefix="/api/readiness", tags=["readiness"])
+app.include_router(publishing.router, prefix="/api/publishing", tags=["publishing"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 
 

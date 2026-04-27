@@ -38,6 +38,7 @@ class DraftUpdateRequest(BaseModel):
     content_type: Optional[str] = None
     notes: Optional[str] = None
     status: Optional[str] = None
+    publishing_meta: Optional[dict] = None  # JSON object — di-serialize backend
 
 
 class DraftResponse(BaseModel):
@@ -51,6 +52,11 @@ class DraftResponse(BaseModel):
     published_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    # Publishing
+    publishing_meta: Optional[dict] = None
+    published_url: Optional[str] = None
+    laravel_post_id: Optional[int] = None
+    published_at_blog: Optional[datetime] = None
 
 
 class DraftListItem(BaseModel):
@@ -61,6 +67,7 @@ class DraftListItem(BaseModel):
     status: str
     published_at: Optional[datetime] = None
     updated_at: datetime
+    published_url: Optional[str] = None  # supaya list bisa show "🔗 published" badge
 
 
 # ===== M2 YMYL/Policy Pattern Detection =====
@@ -99,6 +106,33 @@ class SeoSnippetResponse(BaseModel):
     meta_description: str
     slug: str
     keywords: list[str]
+
+
+# ===== Publishing (Laravel autopost) =====
+
+class PublishRequest(BaseModel):
+    force: bool = False
+
+
+class PublishResponse(BaseModel):
+    laravel_post_id: int
+    status: str
+    admin_url: str
+    public_url: Optional[str] = None
+    updated_fields: list[str] = []
+    preserved_fields: list[str] = []
+    raw: dict = {}
+
+
+class PublishStatusResponse(BaseModel):
+    laravel_post_id: int
+    status: str
+    processing_error: Optional[str] = None
+    admin_url: Optional[str] = None
+    public_url: Optional[str] = None
+    downloaded_images: int = 0
+    total_images: int = 0
+    updated_at: Optional[str] = None
 
 
 # ===== Workflow =====

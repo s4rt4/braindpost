@@ -15,6 +15,7 @@ import {
   Select,
   Stack,
   Switch,
+  TagsInput,
   Text,
   Textarea,
   TextInput,
@@ -35,20 +36,42 @@ import {
   IconCopy,
   IconDeviceFloppy,
   IconDownload,
+  IconExternalLink,
   IconEye,
   IconLayoutColumns,
   IconLink,
   IconPencil,
   IconPhoto,
   IconPlus,
+  IconRocket,
   IconSearch,
   IconShieldCheck,
   IconSparkles,
+  IconStar,
   IconTrash,
+  IconX,
 } from '@tabler/icons-react';
 import { apiDelete, apiGet, apiPost, apiPut } from '../api/client';
 
 type DraftStatus = 'draft' | 'revisi' | 'siap_publish' | 'published';
+
+type FeaturedImageMeta = {
+  url?: string;
+  alt?: string;
+  photographer?: string;
+  provider?: string;
+  credit?: string;
+};
+
+type PublishingMeta = {
+  category?: string;
+  tags?: string[];
+  keywords?: string[];
+  slug?: string;
+  meta_title?: string;
+  meta_description?: string;
+  featured_image?: FeaturedImageMeta;
+};
 
 type DraftListItem = {
   id: number;
@@ -58,12 +81,34 @@ type DraftListItem = {
   status: DraftStatus;
   published_at: string | null;
   updated_at: string;
+  published_url: string | null;
 };
 
 type Draft = DraftListItem & {
   content_md: string;
   notes: string;
   created_at: string;
+  publishing_meta: PublishingMeta | null;
+  laravel_post_id: number | null;
+  published_at_blog: string | null;
+};
+
+type LaravelPublishStatus =
+  | 'processing'
+  | 'draft'
+  | 'processing_failed'
+  | 'scheduled'
+  | 'published';
+
+type PublishStatusResp = {
+  laravel_post_id: number;
+  status: LaravelPublishStatus;
+  processing_error: string | null;
+  admin_url: string | null;
+  public_url: string | null;
+  downloaded_images: number;
+  total_images: number;
+  updated_at: string | null;
 };
 
 const CONTENT_TYPES = [
@@ -288,6 +333,11 @@ export default function Drafts() {
   const [status, setStatus] = useState<DraftStatus>('draft');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [eeeatState, setEeeatState] = useState<Record<string, boolean>>({});
+  const [publishingMeta, setPublishingMeta] = useState<PublishingMeta>({});
+
+  function patchPublishingMeta(patch: Partial<PublishingMeta>) {
+    setPublishingMeta((prev) => ({ ...prev, ...patch }));
+  }
 
   // Auto-save (M6)
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -347,6 +397,22 @@ export default function Drafts() {
       alt: string;
     }>
   >([]);
+
+  // Publishing — Laravel autopost
+  const [publishOpened, { open: openPublish, close: closePublish }] = useDisclosure(false);
+  const [publishStage, setPublishStage] = useState<'preflight' | 'progress'>('preflight');
+  const [publishForceFlag, setPublishForceFlag] = useState(false);
+  const [publishLoading, setPublishLoading] = useState(false);
+  const [publishStatus, setPublishStatus] = useState<PublishStatusResp | null>(null);
+  const [publishFieldsInfo, setPublishFieldsInfo] = useState<{
+    updated: string[];
+    preserved: string[];
+  } | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [forceConfirmOpened, { open: openForceConfirm, close: closeForceConfirm }] =
+    useDisclosure(false);
+  const [forceConfirmAdminUrl, setForceConfirmAdminUrl] = useState<string | null>(null);
+  const pollAbortRef = useRef<boolean>(false);
 
   // ===== Handlers =====
 
@@ -476,6 +542,35 @@ export default function Drafts() {
     closeImgPicker();
   }
 
+  function setAsFeatured(item: (typeof imgResults)[number]) {
+    const providerLabel =
+      item.provider.charAt(0).toUpperCase() + item.provider.slice(1);
+    const credit = `Foto: ${item.photographer || 'Unknown'} via ${providerLabel}`;
+    patchPublishingMeta({
+      featured_image: {
+        url: item.url,
+        alt: item.alt || `Foto oleh ${item.photographer || 'Unknown'}`,
+        photographer: item.photographer,
+        provider: item.provider,
+        credit,
+      },
+    });
+    notifications.show({
+      color: 'orange',
+      icon: <IconStar size={16} />,
+      message: `Featured image diset: foto oleh ${item.photographer || 'Unknown'}.`,
+    });
+    closeImgPicker();
+  }
+
+  function removeFeatured() {
+    patchPublishingMeta({ featured_image: undefined });
+    notifications.show({
+      color: 'gray',
+      message: 'Featured image dilepas.',
+    });
+  }
+
   function insertLinkAtEnd(suggestion: (typeof linkSuggestions)[number]) {
     const linkMd = ` [${suggestion.suggested_anchor}](/${suggestion.slug})`;
     setContentMd(contentMd + linkMd);
@@ -485,6 +580,142 @@ export default function Drafts() {
     });
   }
 
+  function saveSeoToMeta() {
+    if (!seoResult) return;
+    patchPublishingMeta({
+      meta_title: seoResult.meta_title,
+      meta_description: seoResult.meta_description,
+      slug: seoResult.slug,
+      keywords: seoResult.keywords,
+    });
+    notifications.show({
+      color: 'teal',
+      icon: <IconCheck size={16} />,
+      message: 'SEO snippet tersimpan ke draft. Akan dipakai saat publish.',
+    });
+    closeSeo();
+  }
+
+  // ===== Publishing — Laravel autopost =====
+
+  async function pollPublishStatus(draftId: number) {
+    // Exponential backoff: 3s, 5s, 8s, 13s, 20s, 30s — max ~80s total
+    const intervals = [3000, 5000, 8000, 13000, 20000, 30000];
+    pollAbortRef.current = false;
+    for (const ms of intervals) {
+      if (pollAbortRef.current) return;
+      await new Promise((r) => setTimeout(r, ms));
+      if (pollAbortRef.current) return;
+      try {
+        const data = await apiGet<PublishStatusResp>(
+          `/drafts/${draftId}/publish-status`,
+        );
+        setPublishStatus(data);
+        if (data.status !== 'processing') {
+          // refresh draft list & current draft (kalau status published, BE sudah set published_url)
+          await fetchList();
+          if (selected?.id === draftId) {
+            try {
+              const refreshed = await apiGet<Draft>(`/drafts/${draftId}`);
+              setSelected(refreshed);
+            } catch {
+              /* ignore */
+            }
+          }
+          return;
+        }
+      } catch (e) {
+        setPublishError(e instanceof Error ? e.message : 'Polling gagal');
+        return;
+      }
+    }
+    // Timeout — biarin user lihat last status
+  }
+
+  function startPublishFlow(force = false) {
+    if (!selected) return;
+    setPublishForceFlag(force);
+    setPublishStage('preflight');
+    setPublishStatus(null);
+    setPublishFieldsInfo(null);
+    setPublishError(null);
+    openPublish();
+  }
+
+  async function confirmPublish() {
+    setPublishStage('progress');
+    return publishToBlog(publishForceFlag);
+  }
+
+  async function publishToBlog(force = false) {
+    if (!selected) return;
+    setPublishLoading(true);
+    setPublishStatus(null);
+    setPublishFieldsInfo(null);
+    setPublishError(null);
+    try {
+      const resp = await apiPost<{
+        laravel_post_id: number;
+        status: LaravelPublishStatus;
+        admin_url: string;
+        public_url: string | null;
+        updated_fields: string[];
+        preserved_fields: string[];
+      }>(`/drafts/${selected.id}/publish`, { force });
+
+      setPublishStatus({
+        laravel_post_id: resp.laravel_post_id,
+        status: resp.status,
+        processing_error: null,
+        admin_url: resp.admin_url,
+        public_url: resp.public_url,
+        downloaded_images: 0,
+        total_images: 0,
+        updated_at: null,
+      });
+      setPublishFieldsInfo({
+        updated: resp.updated_fields ?? [],
+        preserved: resp.preserved_fields ?? [],
+      });
+
+      // Refresh draft (BE sudah simpan laravel_post_id)
+      try {
+        const refreshed = await apiGet<Draft>(`/drafts/${selected.id}`);
+        setSelected(refreshed);
+      } catch {
+        /* ignore */
+      }
+
+      // Selalu polling — even kalau status awal sudah draft (sync queue mode)
+      // sesuai BLOG_INTEGRATION.md section 13.4
+      if (resp.status === 'processing') {
+        pollPublishStatus(selected.id);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Publish gagal';
+      // Detect 409 conflict — extract admin_url
+      if (msg.includes('409')) {
+        // detail comes back as JSON-stringified dict from FastAPI HTTPException
+        try {
+          const match = msg.match(/admin_url[^a-zA-Z]+([^"',}]+)/);
+          if (match) setForceConfirmAdminUrl(match[1]);
+        } catch {
+          /* ignore */
+        }
+        closePublish();
+        openForceConfirm();
+      } else {
+        setPublishError(msg);
+      }
+    } finally {
+      setPublishLoading(false);
+    }
+  }
+
+  function cancelPolling() {
+    pollAbortRef.current = true;
+  }
+
   function computeSig(values: {
     title: string;
     content_md: string;
@@ -492,6 +723,7 @@ export default function Drafts() {
     tone: string;
     notes: string;
     status: string;
+    publishing_meta: PublishingMeta;
   }): string {
     return JSON.stringify({
       t: values.title,
@@ -500,6 +732,7 @@ export default function Drafts() {
       tn: values.tone,
       n: values.notes,
       s: values.status,
+      pm: values.publishing_meta,
     });
   }
 
@@ -512,6 +745,7 @@ export default function Drafts() {
       tone: d.tone,
       notes: d.notes,
       status: d.status,
+      publishing_meta: d.publishing_meta ?? {},
     });
     setLastSavedAt(new Date(d.updated_at));
   }
@@ -576,6 +810,7 @@ export default function Drafts() {
     setContentMd('');
     setStatus('draft');
     setEeeatState({});
+    setPublishingMeta({});
     lastSavedSigRef.current = '';
     setLastSavedAt(null);
   }
@@ -588,6 +823,7 @@ export default function Drafts() {
     tone,
     notes,
     status,
+    publishing_meta: publishingMeta,
   });
   const [debouncedSig] = useDebouncedValue(currentSig, 3000);
 
@@ -606,6 +842,7 @@ export default function Drafts() {
       tone,
       notes,
       status,
+      publishing_meta: publishingMeta,
     })
       .then((d) => {
         // Pastikan masih di draft yang sama (user bisa pindah selama in-flight)
@@ -643,6 +880,7 @@ export default function Drafts() {
       setContentMd(d.content_md);
       setStatus(d.status);
       setEeeatState(loadEeeatState(d.id));
+      setPublishingMeta(d.publishing_meta ?? {});
       recordSaveBaseline(d);
     } catch (e) {
       notifications.show({
@@ -673,6 +911,7 @@ export default function Drafts() {
       setContentMd(d.content_md);
       setStatus(d.status);
       setEeeatState(loadEeeatState(d.id));
+      setPublishingMeta(d.publishing_meta ?? {});
       recordSaveBaseline(d);
       await fetchList();
       notifications.show({
@@ -702,6 +941,7 @@ export default function Drafts() {
         tone,
         notes,
         status,
+        publishing_meta: publishingMeta,
       });
       setSelected(d);
       recordSaveBaseline(d);
@@ -977,6 +1217,138 @@ export default function Drafts() {
                       </Badge>
                     }
                   />
+                )}
+
+                {/* Publishing metadata: category + tags + featured image (untuk Laravel autopost) */}
+                {mode === 'edit' && (
+                  <Card
+                    withBorder
+                    radius="md"
+                    p="sm"
+                    bg="var(--mantine-color-default-hover)"
+                  >
+                    <Group gap="xs" mb="sm">
+                      <IconRocket size={14} />
+                      <Text size="sm" fw={600}>
+                        Publishing Metadata
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        (untuk autopost ke Laravel blog)
+                      </Text>
+                    </Group>
+
+                    <Stack gap="sm">
+                      <Grid>
+                        <Grid.Col span={{ base: 12, sm: 6 }}>
+                          <TextInput
+                            label="Kategori"
+                            placeholder="mis: Tech, Lifestyle, Bisnis"
+                            value={publishingMeta.category ?? ''}
+                            onChange={(e) =>
+                              patchPublishingMeta({ category: e.currentTarget.value })
+                            }
+                          />
+                        </Grid.Col>
+                        <Grid.Col span={{ base: 12, sm: 6 }}>
+                          <TagsInput
+                            label="Tags"
+                            placeholder="Ketik tag, Enter untuk tambah"
+                            value={publishingMeta.tags ?? []}
+                            onChange={(v) => patchPublishingMeta({ tags: v })}
+                            clearable
+                          />
+                        </Grid.Col>
+                      </Grid>
+
+                      {/* Featured image preview */}
+                      <div>
+                        <Text size="xs" fw={500} mb={4}>
+                          Featured Image
+                        </Text>
+                        {publishingMeta.featured_image?.url ? (
+                          <Card withBorder p="xs">
+                            <Group gap="md" wrap="nowrap" align="flex-start">
+                              <img
+                                src={publishingMeta.featured_image.url}
+                                alt={publishingMeta.featured_image.alt}
+                                style={{
+                                  width: 80,
+                                  height: 60,
+                                  objectFit: 'cover',
+                                  borderRadius: 4,
+                                  flexShrink: 0,
+                                }}
+                              />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <Group gap={4} mb={2}>
+                                  <IconStar size={12} color="var(--mantine-color-orange-6)" />
+                                  <Badge size="xs" variant="filled" color="orange">
+                                    FEATURED
+                                  </Badge>
+                                </Group>
+                                <Text size="xs" lineClamp={1}>
+                                  {publishingMeta.featured_image.alt || '(no alt)'}
+                                </Text>
+                                <Text size="xs" c="dimmed" lineClamp={1}>
+                                  {publishingMeta.featured_image.credit}
+                                </Text>
+                              </div>
+                              <Tooltip label="Lepas featured image">
+                                <ActionIcon
+                                  variant="subtle"
+                                  color="red"
+                                  size="sm"
+                                  onClick={removeFeatured}
+                                >
+                                  <IconX size={14} />
+                                </ActionIcon>
+                              </Tooltip>
+                            </Group>
+                          </Card>
+                        ) : (
+                          <Text size="xs" c="dimmed" fs="italic">
+                            Belum ada — pakai tombol{' '}
+                            <Badge
+                              size="xs"
+                              color="orange"
+                              variant="light"
+                              leftSection={<IconStar size={10} />}
+                            >
+                              Featured
+                            </Badge>{' '}
+                            di Image Picker (Pre-publish Toolkit) untuk set.
+                          </Text>
+                        )}
+                      </div>
+
+                      {/* SEO snippet status */}
+                      {(publishingMeta.meta_title || publishingMeta.slug) && (
+                        <Card withBorder p="xs">
+                          <Group gap="xs" mb={4}>
+                            <IconSearch size={12} />
+                            <Text size="xs" fw={600}>
+                              SEO Snippet tersimpan
+                            </Text>
+                          </Group>
+                          {publishingMeta.meta_title && (
+                            <Text size="xs" lineClamp={1}>
+                              <b>Title:</b> {publishingMeta.meta_title}
+                            </Text>
+                          )}
+                          {publishingMeta.meta_description && (
+                            <Text size="xs" c="dimmed" lineClamp={2}>
+                              {publishingMeta.meta_description}
+                            </Text>
+                          )}
+                          {publishingMeta.slug && (
+                            <Text size="xs" c="dimmed">
+                              <b>Slug:</b> /{publishingMeta.slug}
+                            </Text>
+                          )}
+                        </Card>
+                      )}
+                    </Stack>
+                  </Card>
                 )}
 
                 {mode === 'new' ? (
@@ -1304,7 +1676,44 @@ export default function Drafts() {
                       >
                         Re-generate
                       </Button>
+                      {/* Publish to Blog — hanya muncul saat status siap_publish atau published */}
+                      {selected &&
+                        (status === 'siap_publish' || status === 'published') && (
+                          <Button
+                            color={selected.published_url ? 'orange' : 'green'}
+                            leftSection={<IconRocket size={16} />}
+                            onClick={() => startPublishFlow(false)}
+                            loading={publishLoading}
+                            disabled={publishOpened}
+                          >
+                            {selected.published_url ? 'Update to Blog' : 'Publish to Blog'}
+                          </Button>
+                        )}
                     </Group>
+
+                    {/* Info bar kalau sudah published ke blog */}
+                    {selected?.published_url && (
+                      <Alert color="green" variant="light" icon={<IconRocket size={16} />}>
+                        <Group justify="space-between" wrap="wrap" gap="xs">
+                          <Text size="sm">
+                            Live di blog Laravel
+                            {selected.published_at_blog &&
+                              ` sejak ${formatDate(selected.published_at_blog)}`}
+                          </Text>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            component="a"
+                            href={selected.published_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            leftSection={<IconExternalLink size={12} />}
+                          >
+                            Buka public URL
+                          </Button>
+                        </Group>
+                      </Alert>
+                    )}
                   </>
                 )}
               </Stack>
@@ -1543,6 +1952,21 @@ export default function Drafts() {
                 ))}
               </Group>
             </div>
+            <Group justify="flex-end" mt="md">
+              <Button variant="default" onClick={closeSeo}>
+                Tutup
+              </Button>
+              <Button
+                color="grape"
+                leftSection={<IconDeviceFloppy size={14} />}
+                onClick={saveSeoToMeta}
+              >
+                Simpan ke Draft
+              </Button>
+            </Group>
+            <Text size="xs" c="dimmed" ta="center">
+              "Simpan ke Draft" akan otomatis dipakai sebagai meta saat Publish to Blog.
+            </Text>
           </Stack>
         ) : null}
       </Modal>
@@ -1576,47 +2000,98 @@ export default function Drafts() {
           </Group>
           {imgResults.length > 0 && (
             <Grid gutter="xs">
-              {imgResults.map((item) => (
-                <Grid.Col key={`${item.provider}-${item.id}`} span={{ base: 6, sm: 4 }}>
-                  <Card
-                    withBorder
-                    padding={0}
-                    radius="sm"
-                    style={{ cursor: 'pointer', overflow: 'hidden' }}
-                    onClick={() => insertImage(item)}
+              {imgResults.map((item) => {
+                const isFeatured =
+                  publishingMeta.featured_image?.url === item.url;
+                return (
+                  <Grid.Col
+                    key={`${item.provider}-${item.id}`}
+                    span={{ base: 6, sm: 4 }}
                   >
-                    <div style={{ position: 'relative', aspectRatio: '4/3' }}>
-                      <img
-                        src={item.thumb}
-                        alt={item.alt}
-                        loading="lazy"
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'cover',
-                          display: 'block',
-                        }}
-                      />
-                      <Badge
-                        size="xs"
-                        color={
-                          item.provider === 'pexels'
-                            ? 'teal'
-                            : item.provider === 'unsplash'
-                              ? 'dark'
-                              : 'green'
-                        }
-                        style={{ position: 'absolute', top: 4, right: 4 }}
-                      >
-                        {item.provider}
-                      </Badge>
-                    </div>
-                    <Text size="xs" c="dimmed" p={4} truncate>
-                      📷 {item.photographer || 'Unknown'}
-                    </Text>
-                  </Card>
-                </Grid.Col>
-              ))}
+                    <Card
+                      withBorder
+                      padding={0}
+                      radius="sm"
+                      style={{
+                        overflow: 'hidden',
+                        borderColor: isFeatured
+                          ? 'var(--mantine-color-orange-filled)'
+                          : undefined,
+                      }}
+                    >
+                      <div style={{ position: 'relative', aspectRatio: '4/3' }}>
+                        <img
+                          src={item.thumb}
+                          alt={item.alt}
+                          loading="lazy"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            display: 'block',
+                          }}
+                        />
+                        <Badge
+                          size="xs"
+                          color={
+                            item.provider === 'pexels'
+                              ? 'teal'
+                              : item.provider === 'unsplash'
+                                ? 'dark'
+                                : 'green'
+                          }
+                          style={{ position: 'absolute', top: 4, right: 4 }}
+                        >
+                          {item.provider}
+                        </Badge>
+                        {isFeatured && (
+                          <Badge
+                            size="xs"
+                            color="orange"
+                            variant="filled"
+                            leftSection={<IconStar size={10} />}
+                            style={{ position: 'absolute', top: 4, left: 4 }}
+                          >
+                            FEATURED
+                          </Badge>
+                        )}
+                      </div>
+                      <Stack gap={4} p={4}>
+                        <Text size="xs" c="dimmed" truncate>
+                          📷 {item.photographer || 'Unknown'}
+                        </Text>
+                        <Group gap={4} wrap="nowrap">
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            style={{ flex: 1 }}
+                            onClick={() => insertImage(item)}
+                          >
+                            Sisipkan
+                          </Button>
+                          <Tooltip
+                            label={
+                              isFeatured
+                                ? 'Sudah jadi featured'
+                                : 'Jadikan featured image'
+                            }
+                          >
+                            <ActionIcon
+                              variant={isFeatured ? 'filled' : 'light'}
+                              color="orange"
+                              size="md"
+                              onClick={() => setAsFeatured(item)}
+                              disabled={isFeatured}
+                            >
+                              <IconStar size={12} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
+                      </Stack>
+                    </Card>
+                  </Grid.Col>
+                );
+              })}
             </Grid>
           )}
           {imgResults.length === 0 && !imgLoading && (
@@ -1624,6 +2099,378 @@ export default function Drafts() {
               Cari kata kunci → klik gambar untuk sisipkan markdown ke akhir konten.
             </Text>
           )}
+        </Stack>
+      </Modal>
+
+      {/* Publish to Blog — 2-stage Modal (preflight + progress) */}
+      <Modal
+        opened={publishOpened}
+        onClose={() => {
+          cancelPolling();
+          closePublish();
+        }}
+        title={
+          <Group gap="xs">
+            <IconRocket size={18} />
+            <Text fw={600}>
+              {publishStage === 'preflight' ? 'Konfirmasi Publish' : 'Publish to Laravel Blog'}
+            </Text>
+            {publishForceFlag && (
+              <Badge size="xs" color="orange" variant="filled">
+                FORCE
+              </Badge>
+            )}
+          </Group>
+        }
+        size="md"
+        centered
+        closeOnClickOutside={false}
+      >
+        {/* STAGE 1 — Preflight confirmation */}
+        {publishStage === 'preflight' && (
+          <Stack gap="md">
+            <Text size="sm" c="dimmed">
+              Cek payload yang akan dikirim ke Laravel blog. Field admin (slug, kategori,
+              tags, featured image) cuma di-set kalau admin belum isi sendiri.
+            </Text>
+
+            <Card withBorder p="sm">
+              <Stack gap="xs">
+                <div>
+                  <Text size="xs" fw={600} c="dimmed">
+                    JUDUL
+                  </Text>
+                  <Text size="sm" fw={500} lineClamp={2}>
+                    {title || <Text component="span" c="red">(KOSONG — wajib diisi)</Text>}
+                  </Text>
+                </div>
+                <div>
+                  <Text size="xs" fw={600} c="dimmed">
+                    KONTEN
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    {contentMd.length.toLocaleString('id-ID')} karakter ·{' '}
+                    {(contentMd.match(/!\[[^\]]*\]\(https?:\/\/[^)]+\)/g) || []).length}{' '}
+                    inline image
+                  </Text>
+                </div>
+                {publishingMeta.category && (
+                  <div>
+                    <Text size="xs" fw={600} c="dimmed">
+                      KATEGORI
+                    </Text>
+                    <Badge variant="light">{publishingMeta.category}</Badge>
+                  </div>
+                )}
+                {(publishingMeta.tags?.length ?? 0) > 0 && (
+                  <div>
+                    <Text size="xs" fw={600} c="dimmed">
+                      TAGS
+                    </Text>
+                    <Group gap={4}>
+                      {publishingMeta.tags!.map((t) => (
+                        <Badge key={t} size="xs" variant="light" color="blue">
+                          {t}
+                        </Badge>
+                      ))}
+                    </Group>
+                  </div>
+                )}
+                {publishingMeta.featured_image?.url && (
+                  <div>
+                    <Text size="xs" fw={600} c="dimmed" mb={2}>
+                      FEATURED IMAGE
+                    </Text>
+                    <Group gap="xs" wrap="nowrap">
+                      <img
+                        src={publishingMeta.featured_image.url}
+                        alt=""
+                        style={{
+                          width: 50,
+                          height: 38,
+                          objectFit: 'cover',
+                          borderRadius: 4,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <Text size="xs" c="dimmed" lineClamp={1}>
+                        {publishingMeta.featured_image.credit}
+                      </Text>
+                    </Group>
+                  </div>
+                )}
+                {publishingMeta.meta_title && (
+                  <div>
+                    <Text size="xs" fw={600} c="dimmed">
+                      META TITLE
+                    </Text>
+                    <Text size="xs" lineClamp={1}>
+                      {publishingMeta.meta_title}
+                    </Text>
+                  </div>
+                )}
+              </Stack>
+            </Card>
+
+            {/* Warnings — pre-flight checks */}
+            {(() => {
+              const warnings: string[] = [];
+              if (!title.trim()) warnings.push('Judul kosong');
+              if (!contentMd.trim()) warnings.push('Konten kosong');
+              if (contentMd.length < 500)
+                warnings.push('Konten pendek (<500 karakter) — AdSense lebih suka konten >800 kata');
+              if (!publishingMeta.featured_image?.url)
+                warnings.push('Belum ada featured image — Laravel akan publish tanpa hero image');
+              if (!publishingMeta.category)
+                warnings.push('Belum ada kategori — admin harus isi manual di Filament');
+              if (!publishingMeta.meta_title)
+                warnings.push('Belum ada SEO meta — Laravel auto-derive dari title (kurang optimal)');
+              if (warnings.length === 0) return null;
+              return (
+                <Alert
+                  color={warnings.some((w) => w.includes('kosong')) ? 'red' : 'yellow'}
+                  variant="light"
+                  icon={<IconAlertTriangle size={16} />}
+                >
+                  <Text size="xs" fw={500} mb={4}>
+                    Pre-flight check
+                  </Text>
+                  <Stack gap={2}>
+                    {warnings.map((w, i) => (
+                      <Text key={i} size="xs">
+                        • {w}
+                      </Text>
+                    ))}
+                  </Stack>
+                </Alert>
+              );
+            })()}
+
+            <Group justify="flex-end">
+              <Button variant="default" onClick={closePublish}>
+                Batal
+              </Button>
+              <Button
+                color={publishForceFlag ? 'orange' : 'green'}
+                leftSection={<IconRocket size={14} />}
+                onClick={confirmPublish}
+                disabled={!title.trim() || !contentMd.trim()}
+              >
+                {publishForceFlag ? 'Force Publish' : 'Lanjut Publish'}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+
+        {/* STAGE 2 — Progress (was the original modal content) */}
+        {publishStage === 'progress' && (
+          <>
+            {publishError && (
+          <Alert color="red" variant="light" mb="md" icon={<IconAlertTriangle size={16} />}>
+            <Text size="sm" fw={500}>
+              Gagal publish
+            </Text>
+            <Text size="xs" mt={4}>
+              {publishError}
+            </Text>
+          </Alert>
+        )}
+
+        {publishLoading && !publishStatus && (
+          <Group justify="center" py="xl" gap="sm">
+            <Loader size="sm" />
+            <Text size="sm" c="dimmed">
+              Mengirim payload ke blog...
+            </Text>
+          </Group>
+        )}
+
+        {publishStatus && (
+          <Stack gap="md">
+            {publishStatus.status === 'processing' && (
+              <>
+                <Group gap="sm">
+                  <Loader size="sm" />
+                  <Text size="sm">
+                    Background job download gambar... {publishStatus.downloaded_images}/
+                    {publishStatus.total_images || '?'}
+                  </Text>
+                </Group>
+                <Text size="xs" c="dimmed">
+                  Polling exponential backoff (3-30 detik). Aman tutup modal — proses
+                  lanjut di background, status final bisa dicek nanti.
+                </Text>
+              </>
+            )}
+
+            {publishStatus.status === 'draft' && (
+              <Alert color="green" variant="light" icon={<IconCheck size={16} />}>
+                <Text size="sm" fw={500}>
+                  Sukses — artikel masuk sebagai DRAFT di Laravel
+                </Text>
+                <Text size="xs" mt={4}>
+                  Buka admin URL untuk kurasi (kategori, SEO, slug, dll), lalu publish dari Filament.
+                </Text>
+              </Alert>
+            )}
+
+            {publishStatus.status === 'published' && (
+              <Alert color="teal" variant="light" icon={<IconRocket size={16} />}>
+                <Text size="sm" fw={500}>
+                  LIVE di blog!
+                </Text>
+              </Alert>
+            )}
+
+            {publishStatus.status === 'processing_failed' && (
+              <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />}>
+                <Text size="sm" fw={500}>
+                  Background job gagal
+                </Text>
+                <Text size="xs" mt={4}>
+                  {publishStatus.processing_error || 'unknown error'}
+                </Text>
+                <Text size="xs" mt={4} c="dimmed">
+                  Buka admin URL untuk fix manual (mis. upload featured image langsung).
+                </Text>
+              </Alert>
+            )}
+
+            {/* Updated/preserved fields info — penting untuk re-POST/force update */}
+            {publishFieldsInfo &&
+              (publishFieldsInfo.updated.length > 0 ||
+                publishFieldsInfo.preserved.length > 0) && (
+                <Card withBorder p="xs">
+                  {publishFieldsInfo.updated.length > 0 && (
+                    <div>
+                      <Text size="xs" fw={600} c="green" mb={2}>
+                        ✅ Diupdate
+                      </Text>
+                      <Group gap={4} mb="xs">
+                        {publishFieldsInfo.updated.map((f) => (
+                          <Badge key={f} size="xs" variant="light" color="green">
+                            {f}
+                          </Badge>
+                        ))}
+                      </Group>
+                    </div>
+                  )}
+                  {publishFieldsInfo.preserved.length > 0 && (
+                    <div>
+                      <Text size="xs" fw={600} c="dimmed" mb={2}>
+                        🔒 Dipertahankan oleh admin Laravel
+                      </Text>
+                      <Group gap={4}>
+                        {publishFieldsInfo.preserved.map((f) => (
+                          <Badge key={f} size="xs" variant="light" color="gray">
+                            {f}
+                          </Badge>
+                        ))}
+                      </Group>
+                    </div>
+                  )}
+                </Card>
+              )}
+
+            <Group gap="xs" wrap="wrap">
+              {publishStatus.admin_url && (
+                <Button
+                  size="xs"
+                  variant="light"
+                  component="a"
+                  href={publishStatus.admin_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  leftSection={<IconExternalLink size={12} />}
+                >
+                  Admin (Filament)
+                </Button>
+              )}
+              {publishStatus.public_url && (
+                <Button
+                  size="xs"
+                  variant="light"
+                  color="green"
+                  component="a"
+                  href={publishStatus.public_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  leftSection={<IconExternalLink size={12} />}
+                >
+                  Public URL
+                </Button>
+              )}
+              {publishStatus.status === 'processing' && (
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  color="gray"
+                  onClick={() => {
+                    if (selected) {
+                      pollAbortRef.current = false;
+                      pollPublishStatus(selected.id);
+                    }
+                  }}
+                >
+                  Re-poll sekarang
+                </Button>
+              )}
+            </Group>
+
+            <Text size="xs" c="dimmed">
+              Laravel post id: <b>{publishStatus.laravel_post_id}</b>
+            </Text>
+          </Stack>
+        )}
+          </>
+        )}
+      </Modal>
+
+      {/* Force Confirmation Modal — kalau dapat 409 conflict */}
+      <Modal
+        opened={forceConfirmOpened}
+        onClose={closeForceConfirm}
+        title="Artikel sudah live — force update?"
+        size="sm"
+        centered
+      >
+        <Stack gap="sm">
+          <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={16} />}>
+            <Text size="sm">
+              Artikel ini sudah <b>published</b> di blog. Force update HANYA mengganti{' '}
+              <b>title, content, meta_title, meta_description, keywords</b>. Field admin
+              (slug, kategori, tags, featured image) <b>tidak akan berubah</b>.
+            </Text>
+          </Alert>
+          {forceConfirmAdminUrl && (
+            <Button
+              size="xs"
+              variant="light"
+              component="a"
+              href={forceConfirmAdminUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              leftSection={<IconExternalLink size={12} />}
+              maw={180}
+            >
+              Lihat di admin dulu
+            </Button>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closeForceConfirm}>
+              Batal
+            </Button>
+            <Button
+              color="orange"
+              leftSection={<IconRocket size={14} />}
+              onClick={() => {
+                closeForceConfirm();
+                startPublishFlow(true);
+              }}
+            >
+              Force Update
+            </Button>
+          </Group>
         </Stack>
       </Modal>
     </Stack>

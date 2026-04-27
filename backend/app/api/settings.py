@@ -64,6 +64,24 @@ KNOWN_SETTINGS = [
         "description": "Untuk pencarian stock photo Pixabay. Daftar gratis di pixabay.com/api/docs.",
         "placeholder": "",
     },
+    {
+        "key": "publishing.laravel_url",
+        "label": "Laravel Blog URL",
+        "type": "text",
+        "category": "Publishing",
+        "active": True,
+        "description": "URL base Laravel blog (contoh: https://myblog.test). Tanpa trailing slash.",
+        "placeholder": "https://myblog.test",
+    },
+    {
+        "key": "publishing.laravel_token",
+        "label": "Laravel API Token",
+        "type": "password",
+        "category": "Publishing",
+        "active": True,
+        "description": "Bearer token dari Filament admin → Pengaturan → Braindpost API Token.",
+        "placeholder": "blog_xxx_yyy_zzz",
+    },
 ]
 
 KNOWN_KEYS = {s["key"] for s in KNOWN_SETTINGS}
