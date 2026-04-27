@@ -2,6 +2,7 @@ from ...settings_store import get_value
 from .base import LLMProvider
 from .deepseek import DeepSeekProvider
 from .gemini import GeminiProvider
+from .openai import OpenAIProvider
 
 
 class LLMRouter(LLMProvider):
@@ -15,6 +16,7 @@ class LLMRouter(LLMProvider):
         self._providers: dict[str, LLMProvider] = {
             "deepseek": DeepSeekProvider(),
             "gemini": GeminiProvider(),
+            "openai": OpenAIProvider(),
         }
 
     def _active(self) -> LLMProvider:
