@@ -129,6 +129,15 @@ KNOWN_SETTINGS = [
         "placeholder": "tvly-...",
     },
     {
+        "key": "fal_api_key",
+        "label": "Fal.ai API Key",
+        "type": "password",
+        "category": "Image Generation",
+        "active": True,
+        "description": "Generate featured image unik via Flux Schnell ($0.003/image, 1-2 detik). Daftar di fal.ai/dashboard/keys.",
+        "placeholder": "...",
+    },
+    {
         "key": "publishing.laravel_url",
         "label": "Laravel Blog URL",
         "type": "text",

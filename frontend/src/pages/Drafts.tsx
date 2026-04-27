@@ -386,6 +386,7 @@ export default function Drafts() {
 
   // Bonus — Featured image picker
   const [imgPickerOpened, { open: openImgPicker, close: closeImgPicker }] = useDisclosure(false);
+  const [imgPickerTab, setImgPickerTab] = useState<'search' | 'generate'>('search');
   const [imgQuery, setImgQuery] = useState('');
   const [imgLoading, setImgLoading] = useState(false);
   const [imgResults, setImgResults] = useState<
@@ -398,6 +399,21 @@ export default function Drafts() {
       alt: string;
     }>
   >([]);
+
+  // AI Image Generation (Fal.ai Flux)
+  const [genPrompt, setGenPrompt] = useState('');
+  const [genAspect, setGenAspect] = useState<'1:1' | '16:9' | '9:16' | '4:3' | '3:4'>(
+    '16:9',
+  );
+  const [genLoading, setGenLoading] = useState(false);
+  const [genResult, setGenResult] = useState<{
+    url: string;
+    width: number;
+    height: number;
+    seed: number;
+    cost_usd: number;
+    prompt: string;
+  } | null>(null);
 
   // Tavily research
   const [researchOpened, { open: openResearch, close: closeResearch }] =
@@ -545,6 +561,63 @@ export default function Drafts() {
     } finally {
       setImgLoading(false);
     }
+  }
+
+  // ===== Fal.ai Image Generation handlers =====
+
+  async function generateAiImage() {
+    if (!genPrompt.trim()) {
+      notifications.show({ color: 'yellow', message: 'Ketik prompt dulu.' });
+      return;
+    }
+    setGenLoading(true);
+    setGenResult(null);
+    try {
+      const data = await apiPost<typeof genResult>('/images/generate', {
+        prompt: genPrompt,
+        aspect: genAspect,
+      });
+      setGenResult(data);
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Generate gagal',
+        message: e instanceof Error ? e.message : 'unknown',
+      });
+    } finally {
+      setGenLoading(false);
+    }
+  }
+
+  function insertGenerated() {
+    if (!genResult) return;
+    const altText = genPrompt.slice(0, 100);
+    const imgMd = `\n\n![${altText}](${genResult.url})\n*AI-generated via Fal.ai Flux Schnell*\n\n`;
+    setContentMd(contentMd + imgMd);
+    notifications.show({
+      color: 'teal',
+      message: 'AI image disisipkan ke konten.',
+    });
+    closeImgPicker();
+  }
+
+  function setGeneratedAsFeatured() {
+    if (!genResult) return;
+    patchPublishingMeta({
+      featured_image: {
+        url: genResult.url,
+        alt: genPrompt.slice(0, 200),
+        photographer: 'AI Generated',
+        provider: 'fal-flux-schnell',
+        credit: 'AI-generated via Fal.ai Flux Schnell',
+      },
+    });
+    notifications.show({
+      color: 'orange',
+      icon: <IconStar size={16} />,
+      message: 'AI image diset sebagai featured image.',
+    });
+    closeImgPicker();
   }
 
   function insertImage(item: (typeof imgResults)[number]) {
@@ -2037,15 +2110,120 @@ export default function Drafts() {
         ) : null}
       </Modal>
 
-      {/* Bonus — Featured Image Picker Modal */}
+      {/* Bonus — Featured Image Picker Modal (2 tabs: Search vs Generate) */}
       <Modal
         opened={imgPickerOpened}
         onClose={closeImgPicker}
-        title="Sisipkan Image ke Konten"
+        title="Image untuk Konten"
         size="xl"
         centered
       >
         <Stack gap="md">
+          <SegmentedControl
+            value={imgPickerTab}
+            onChange={(v) => setImgPickerTab(v as typeof imgPickerTab)}
+            data={[
+              { value: 'search', label: '🔍 Stock Photo Search' },
+              { value: 'generate', label: '✨ AI Generate (Fal.ai)' },
+            ]}
+            fullWidth
+          />
+
+          {imgPickerTab === 'generate' && (
+            <Stack gap="sm">
+              <Alert color="grape" variant="light" p="xs">
+                <Text size="xs">
+                  Generate featured image unik via <b>Fal.ai Flux Schnell</b> — 1-2
+                  detik per image, $0.003/image. Cocok untuk artikel yang nggak ada
+                  stock photo cocok.
+                </Text>
+              </Alert>
+              <Textarea
+                label="Prompt"
+                placeholder="mis: A modern minimalist workspace with a laptop, coffee, and golden hour lighting through window, photorealistic"
+                value={genPrompt}
+                onChange={(e) => setGenPrompt(e.currentTarget.value)}
+                autosize
+                minRows={2}
+                maxRows={5}
+              />
+              <Group justify="space-between">
+                <SegmentedControl
+                  size="xs"
+                  value={genAspect}
+                  onChange={(v) => setGenAspect(v as typeof genAspect)}
+                  data={[
+                    { value: '16:9', label: '16:9' },
+                    { value: '1:1', label: '1:1' },
+                    { value: '9:16', label: '9:16' },
+                    { value: '4:3', label: '4:3' },
+                    { value: '3:4', label: '3:4' },
+                  ]}
+                />
+                <Button
+                  onClick={generateAiImage}
+                  loading={genLoading}
+                  leftSection={<IconSparkles size={14} />}
+                  color="grape"
+                >
+                  Generate
+                </Button>
+              </Group>
+
+              {genResult && (
+                <Card withBorder p="sm">
+                  <img
+                    src={genResult.url}
+                    alt={genPrompt}
+                    style={{
+                      width: '100%',
+                      maxHeight: 400,
+                      objectFit: 'contain',
+                      borderRadius: 4,
+                    }}
+                  />
+                  <Group gap="xs" mt="xs" wrap="wrap">
+                    <Badge size="xs" variant="light">
+                      {genResult.width}×{genResult.height}
+                    </Badge>
+                    <Badge size="xs" variant="light" color="grape">
+                      seed {genResult.seed}
+                    </Badge>
+                    <Badge size="xs" variant="light" color="green">
+                      ${genResult.cost_usd.toFixed(3)}
+                    </Badge>
+                  </Group>
+                  <Group mt="md">
+                    <Button
+                      size="xs"
+                      variant="light"
+                      onClick={insertGenerated}
+                      leftSection={<IconLink size={12} />}
+                    >
+                      Sisipkan ke konten
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="orange"
+                      onClick={setGeneratedAsFeatured}
+                      leftSection={<IconStar size={12} />}
+                    >
+                      Jadikan Featured
+                    </Button>
+                  </Group>
+                </Card>
+              )}
+
+              {!genResult && !genLoading && (
+                <Text size="xs" c="dimmed" ta="center" py="md">
+                  Tulis prompt → klik Generate (~1-2 detik)
+                </Text>
+              )}
+            </Stack>
+          )}
+
+          {imgPickerTab === 'search' && (
           <Group gap="xs" wrap="nowrap">
             <TextInput
               placeholder="Cari di Pexels / Unsplash / Pixabay..."
@@ -2064,7 +2242,8 @@ export default function Drafts() {
               Cari
             </Button>
           </Group>
-          {imgResults.length > 0 && (
+          )}
+          {imgPickerTab === 'search' && imgResults.length > 0 && (
             <Grid gutter="xs">
               {imgResults.map((item) => {
                 const isFeatured =
@@ -2160,7 +2339,7 @@ export default function Drafts() {
               })}
             </Grid>
           )}
-          {imgResults.length === 0 && !imgLoading && (
+          {imgPickerTab === 'search' && imgResults.length === 0 && !imgLoading && (
             <Text size="sm" c="dimmed" ta="center" py="md">
               Cari kata kunci → klik gambar untuk sisipkan markdown ke akhir konten.
             </Text>

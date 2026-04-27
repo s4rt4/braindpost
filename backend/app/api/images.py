@@ -4,8 +4,10 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
+from pydantic import BaseModel, Field
 
 from ..image_processing import process as process_image
+from ..providers.image_gen.fal import fal_flux
 from ..providers.images.base import ImageProvider, ImageResult
 from ..providers.images.pexels import pexels
 from ..providers.images.pixabay import pixabay
@@ -134,3 +136,30 @@ async def process_endpoint(
 
     headers = {"Content-Disposition": f'inline; filename="braindpost.{fmt}"'}
     return Response(content=out_bytes, media_type=content_type, headers=headers)
+
+
+# ===== AI Image Generation (Fal.ai Flux Schnell) =====
+
+class GenerateRequest(BaseModel):
+    prompt: str = Field(min_length=3, max_length=500)
+    aspect: str = Field(default="16:9", pattern="^(1:1|16:9|9:16|4:3|3:4)$")
+
+
+@router.post("/generate")
+async def generate_image(req: GenerateRequest):
+    try:
+        result = await fal_flux.generate(req.prompt, aspect=req.aspect)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Image generation error: {e}")
+
+    return {
+        "url": result.url,
+        "width": result.width,
+        "height": result.height,
+        "seed": result.seed,
+        "model": result.model,
+        "cost_usd": result.cost_usd,
+        "prompt": req.prompt,
+    }
