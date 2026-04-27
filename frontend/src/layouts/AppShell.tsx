@@ -12,6 +12,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   IconBulb,
   IconCalendar,
+  IconLayoutDashboard,
   IconMoon,
   IconPencil,
   IconPhoto,
@@ -24,6 +25,7 @@ import {
 } from '@tabler/icons-react';
 
 const NAV = [
+  { path: '/dashboard', label: 'Dashboard', icon: IconLayoutDashboard },
   { path: '/readiness', label: 'Readiness', icon: IconTarget },
   { path: '/workflow', label: 'Workflow', icon: IconRoute },
   { path: '/ideas', label: 'Ide Topik', icon: IconBulb },

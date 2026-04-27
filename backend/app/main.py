@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import (
     calendar,
+    dashboard,
     drafts,
     ideas,
     images,
@@ -42,6 +43,7 @@ app.include_router(drafts.router, prefix="/api/drafts", tags=["drafts"])
 app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"])
 app.include_router(images.router, prefix="/api/images", tags=["images"])
 app.include_router(readiness.router, prefix="/api/readiness", tags=["readiness"])
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(publishing.router, prefix="/api/publishing", tags=["publishing"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 
