@@ -175,13 +175,14 @@ class CalendarEntryResponse(BaseModel):
 class SettingItem(BaseModel):
     key: str
     label: str
-    type: str  # "text" | "password"
+    type: str  # "text" | "password" | "select"
     category: str
     active: bool
     description: str = ""
     placeholder: str = ""
     is_set: bool
     value_preview: str = ""
+    options: list[str] = []  # untuk type="select"
 
 
 class SettingsBulkUpdate(BaseModel):

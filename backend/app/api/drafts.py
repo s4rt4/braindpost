@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import Draft
-from ..providers.llm.deepseek import llm
+from ..providers.llm.router import llm
 from ..providers.publishing.laravel import laravel_publisher
 from ..schemas import (
     DraftGenerateRequest,

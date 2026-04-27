@@ -11,6 +11,16 @@ router = APIRouter()
 
 KNOWN_SETTINGS = [
     {
+        "key": "llm_provider",
+        "label": "Active LLM Provider",
+        "type": "select",
+        "category": "AI / LLM",
+        "active": True,
+        "description": "Provider yang dipakai untuk semua AI generate (Ide, Draft, Calendar, SEO, YMYL).",
+        "placeholder": "deepseek",
+        "options": ["deepseek", "gemini"],
+    },
+    {
         "key": "deepseek_api_key",
         "label": "DeepSeek API Key",
         "type": "password",
@@ -36,6 +46,24 @@ KNOWN_SETTINGS = [
         "active": True,
         "description": "Endpoint API DeepSeek. Ubah hanya jika tahu kenapa.",
         "placeholder": "https://api.deepseek.com/v1",
+    },
+    {
+        "key": "gemini_api_key",
+        "label": "Gemini API Key",
+        "type": "password",
+        "category": "AI / LLM",
+        "active": True,
+        "description": "Dapatkan gratis di aistudio.google.com/app/apikey. Free tier: 15 RPM untuk gemini-1.5-flash.",
+        "placeholder": "AIza...",
+    },
+    {
+        "key": "gemini_model",
+        "label": "Gemini Model",
+        "type": "text",
+        "category": "AI / LLM",
+        "active": True,
+        "description": "Pilihan: gemini-2.0-flash-exp (cepat) · gemini-1.5-flash · gemini-1.5-pro · gemini-2.5-flash.",
+        "placeholder": "gemini-2.0-flash-exp",
     },
     {
         "key": "pexels_api_key",
@@ -125,6 +153,7 @@ def list_settings(db: Session = Depends(get_db)):
                 placeholder=meta.get("placeholder", ""),
                 is_set=is_set,
                 value_preview=preview,
+                options=meta.get("options", []),
             )
         )
     return items

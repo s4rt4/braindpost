@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import IdeaSession
-from ..providers.llm.deepseek import llm
+from ..providers.llm.router import llm
 from ..schemas import IdeasRequest, IdeasResponse
 
 router = APIRouter()

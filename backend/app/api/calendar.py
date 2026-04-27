@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import CalendarEntry
-from ..providers.llm.deepseek import llm
+from ..providers.llm.router import llm
 from ..schemas import (
     CalendarEntryResponse,
     CalendarGenerateRequest,

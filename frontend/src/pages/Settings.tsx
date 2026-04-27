@@ -7,6 +7,7 @@ import {
   Group,
   Loader,
   PasswordInput,
+  Select,
   Stack,
   Text,
   TextInput,
@@ -25,13 +26,14 @@ import { apiGet, apiPut } from '../api/client';
 type SettingItem = {
   key: string;
   label: string;
-  type: 'text' | 'password';
+  type: 'text' | 'password' | 'select';
   category: string;
   active: boolean;
   description: string;
   placeholder: string;
   is_set: boolean;
   value_preview: string;
+  options: string[];
 };
 
 export default function Settings() {
@@ -198,7 +200,6 @@ export default function Settings() {
             <Stack gap="md">
               {categoryItems.map((item) => {
                 const draft = drafts[item.key] ?? '';
-                const Input = item.type === 'password' ? PasswordInput : TextInput;
                 return (
                   <div key={item.key}>
                     <Group justify="space-between" mb={4} wrap="nowrap">
@@ -236,16 +237,39 @@ export default function Settings() {
                         </Button>
                       )}
                     </Group>
-                    <Input
-                      placeholder={
-                        item.is_set
-                          ? `${item.value_preview}  (kosongkan = tidak diubah)`
-                          : item.placeholder || 'Belum di-set'
-                      }
-                      value={draft}
-                      onChange={(e) => setDraft(item.key, e.currentTarget.value)}
-                      disabled={!item.active && !item.is_set ? false : false}
-                    />
+                    {item.type === 'select' ? (
+                      <Select
+                        data={item.options.map((o) => ({ value: o, label: o }))}
+                        placeholder={
+                          item.is_set
+                            ? `Aktif: ${item.value_preview}`
+                            : item.placeholder || 'Pilih...'
+                        }
+                        value={draft || null}
+                        onChange={(v) => setDraft(item.key, v ?? '')}
+                        clearable={false}
+                      />
+                    ) : item.type === 'password' ? (
+                      <PasswordInput
+                        placeholder={
+                          item.is_set
+                            ? `${item.value_preview}  (kosongkan = tidak diubah)`
+                            : item.placeholder || 'Belum di-set'
+                        }
+                        value={draft}
+                        onChange={(e) => setDraft(item.key, e.currentTarget.value)}
+                      />
+                    ) : (
+                      <TextInput
+                        placeholder={
+                          item.is_set
+                            ? `${item.value_preview}  (kosongkan = tidak diubah)`
+                            : item.placeholder || 'Belum di-set'
+                        }
+                        value={draft}
+                        onChange={(e) => setDraft(item.key, e.currentTarget.value)}
+                      />
+                    )}
                   </div>
                 );
               })}
