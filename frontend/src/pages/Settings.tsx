@@ -119,33 +119,74 @@ export default function Settings() {
 
   const dirtyCount = Object.values(drafts).filter((v) => v !== '').length;
 
+  type LaravelHealthResult = {
+    ok: boolean;
+    state:
+      | 'production'
+      | 'staging'
+      | 'connected'
+      | 'invalid_token'
+      | 'unreachable'
+      | 'timeout'
+      | 'rate_limited'
+      | 'endpoint_not_found'
+      | 'unexpected'
+      | 'non_json'
+      | 'error';
+    status_code?: number;
+    message: string;
+    blog_name?: string;
+    blog_url?: string;
+    blog_mode?: string;
+    api_version?: string;
+    timezone?: string;
+    server_time?: string;
+    limits?: {
+      rate_limit_per_minute?: number;
+      max_image_size_mb?: number;
+      image_download_timeout_seconds?: number;
+    };
+  };
+
   const [testingConnection, setTestingConnection] = useState(false);
+  const [healthResult, setHealthResult] = useState<LaravelHealthResult | null>(
+    null,
+  );
 
   async function testLaravelConnection() {
     setTestingConnection(true);
     try {
-      const result = await apiGet<{
-        ok: boolean;
-        status_code: number;
-        message: string;
-      }>('/publishing/laravel/test-connection');
-      notifications.show({
-        color: result.ok ? 'teal' : 'red',
-        icon: result.ok ? <IconCheck size={16} /> : <IconX size={16} />,
-        title: result.ok ? 'Connection OK' : 'Connection Failed',
-        message: result.message,
-        autoClose: 8000,
-      });
+      const result = await apiGet<LaravelHealthResult>(
+        '/publishing/laravel/test-connection',
+      );
+      setHealthResult(result);
     } catch (e) {
-      notifications.show({
-        color: 'red',
-        title: 'Test gagal',
+      setHealthResult({
+        ok: false,
+        state: 'error',
         message: e instanceof Error ? e.message : 'unknown',
       });
     } finally {
       setTestingConnection(false);
     }
   }
+
+  const STATE_BADGE: Record<
+    LaravelHealthResult['state'],
+    { color: string; label: string }
+  > = {
+    production: { color: 'green', label: 'AKTIF' },
+    staging: { color: 'yellow', label: 'STAGING' },
+    connected: { color: 'teal', label: 'CONNECTED' },
+    invalid_token: { color: 'red', label: 'INVALID TOKEN' },
+    unreachable: { color: 'red', label: 'TIDAK TERHUBUNG' },
+    timeout: { color: 'orange', label: 'TIMEOUT' },
+    rate_limited: { color: 'orange', label: 'RATE LIMITED' },
+    endpoint_not_found: { color: 'red', label: 'ENDPOINT 404' },
+    unexpected: { color: 'red', label: 'UNEXPECTED' },
+    non_json: { color: 'red', label: 'NON-JSON' },
+    error: { color: 'red', label: 'ERROR' },
+  };
 
   if (loading) {
     return (
@@ -196,6 +237,80 @@ export default function Settings() {
                 </Badge>
               </Group>
             </Group>
+
+            {/* Rich health result display untuk kategori Publishing */}
+            {isPublishing && healthResult && (
+              <Card
+                withBorder
+                p="sm"
+                mb="md"
+                bg={
+                  healthResult.ok
+                    ? 'var(--mantine-color-green-light)'
+                    : 'var(--mantine-color-red-light)'
+                }
+              >
+                <Group justify="space-between" mb="xs">
+                  <Group gap="xs">
+                    <Badge
+                      color={STATE_BADGE[healthResult.state].color}
+                      variant="filled"
+                      size="sm"
+                    >
+                      {STATE_BADGE[healthResult.state].label}
+                    </Badge>
+                    {healthResult.blog_name && (
+                      <Text size="sm" fw={500}>
+                        {healthResult.blog_name}
+                      </Text>
+                    )}
+                  </Group>
+                  {healthResult.api_version && (
+                    <Badge size="xs" variant="light" color="gray">
+                      api {healthResult.api_version}
+                    </Badge>
+                  )}
+                </Group>
+
+                <Text size="xs" c="dimmed" mb={healthResult.ok ? 'xs' : 0}>
+                  {healthResult.message}
+                </Text>
+
+                {healthResult.state === 'staging' && (
+                  <Alert color="yellow" variant="light" p="xs" mt="xs">
+                    <Text size="xs">
+                      ⚠️ Mode staging — artikel TIDAK ke-index Google. Switch ke
+                      production URL untuk publish beneran.
+                    </Text>
+                  </Alert>
+                )}
+
+                {healthResult.ok && healthResult.limits && (
+                  <Group gap="xs" mt="xs" wrap="wrap">
+                    {healthResult.blog_url && (
+                      <Badge size="xs" variant="light" color="gray">
+                        🔗 {healthResult.blog_url}
+                      </Badge>
+                    )}
+                    {healthResult.timezone && (
+                      <Badge size="xs" variant="light" color="gray">
+                        🕒 {healthResult.timezone}
+                      </Badge>
+                    )}
+                    {healthResult.limits.rate_limit_per_minute && (
+                      <Badge size="xs" variant="light" color="gray">
+                        ⚡ {healthResult.limits.rate_limit_per_minute}/min
+                      </Badge>
+                    )}
+                    {healthResult.limits.max_image_size_mb && (
+                      <Badge size="xs" variant="light" color="gray">
+                        🖼️ max {healthResult.limits.max_image_size_mb}MB/img
+                      </Badge>
+                    )}
+                  </Group>
+                )}
+              </Card>
+            )}
 
             <Stack gap="md">
               {categoryItems.map((item) => {

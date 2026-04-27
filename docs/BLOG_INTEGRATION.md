@@ -35,8 +35,56 @@ Key principles:
 
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/api/v1/health` | Test Connection — verify URL + token + dapat metadata blog |
 | POST | `/api/v1/posts` | Create / update artikel dari Braindpost |
 | GET | `/api/v1/posts/{id}` | Polling status processing |
+
+### 2.1 GET /api/v1/health (Test Connection)
+
+Dipanggil saat user klik tombol **"Test Connection"** di settings Braindpost. Validasi 3 hal sekaligus:
+1. URL Laravel reachable
+2. Token valid (lewat Bearer auth)
+3. Server responding
+
+**Request:**
+```
+GET /api/v1/health
+Authorization: Bearer {token}
+Accept: application/json
+```
+
+**Response 200 OK:**
+```json
+{
+  "ok": true,
+  "blog_name": "My Blog",
+  "blog_url": "https://myblog.test",
+  "blog_mode": "production",
+  "api_version": "v1",
+  "timezone": "Asia/Jakarta",
+  "server_time": "2026-04-27T14:04:11+07:00",
+  "limits": {
+    "rate_limit_per_minute": 60,
+    "max_image_size_mb": 5,
+    "image_download_timeout_seconds": 30
+  },
+  "endpoints": {
+    "health": "https://myblog.test/api/v1/health",
+    "posts_create": "https://myblog.test/api/v1/posts",
+    "posts_show": "https://myblog.test/api/v1/posts/{id}"
+  }
+}
+```
+
+**Saran UI Braindpost:**
+- 200 + `blog_mode = "production"` → badge **AKTIF** (green), tampilkan `blog_name` sebagai konfirmasi: *"Terhubung ke My Blog"*
+- 200 + `blog_mode = "staging"` → badge **STAGING** (yellow), warning: *"Target adalah blog staging — artikel tidak ke-index Google"*
+- 401 → badge **INVALID TOKEN** (red), pesan: *"Token salah, regenerate di Filament admin → Settings → Braindpost"*
+- 404 / `connection refused` / DNS error → badge **TIDAK TERHUBUNG** (red), pesan: *"URL salah atau server down: {error}"*
+- 429 → badge **RATE LIMITED**, retry after 60 detik
+- Timeout > 5 detik → badge **TIMEOUT**, kemungkinan server slow
+
+**Polling pattern (opsional):** Braindpost bisa health-check otomatis setiap 5 menit di background untuk update status connection di sidebar.
 
 ---
 
@@ -287,6 +335,7 @@ Header `Accept` **tidak digunakan** untuk versioning.
 |---|---|---|
 | 2026-04-26 | Initial contract finalized | Hasil diskusi tim Laravel + tim Braindpost |
 | 2026-04-26 | Sprint 5 — Laravel side LIVE | Lihat section 13 untuk implementation notes |
+| 2026-04-27 | + GET /api/v1/health endpoint | Untuk fitur "Test Connection" di Braindpost UI. Lihat section 2.1 |
 
 ---
 
