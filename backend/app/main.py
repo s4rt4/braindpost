@@ -11,6 +11,7 @@ from .api import (
     images,
     publishing,
     readiness,
+    research,
     settings as settings_api,
     workflow,
 )
@@ -44,6 +45,7 @@ app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"])
 app.include_router(images.router, prefix="/api/images", tags=["images"])
 app.include_router(readiness.router, prefix="/api/readiness", tags=["readiness"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(publishing.router, prefix="/api/publishing", tags=["publishing"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 

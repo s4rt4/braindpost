@@ -120,6 +120,15 @@ KNOWN_SETTINGS = [
         "placeholder": "",
     },
     {
+        "key": "tavily_api_key",
+        "label": "Tavily API Key",
+        "type": "password",
+        "category": "Research",
+        "active": True,
+        "description": "Web search API untuk fact-checking + sumber referensi (mendukung E-E-A-T). Free tier 1000 req/bulan di tavily.com.",
+        "placeholder": "tvly-...",
+    },
+    {
         "key": "publishing.laravel_url",
         "label": "Laravel Blog URL",
         "type": "text",

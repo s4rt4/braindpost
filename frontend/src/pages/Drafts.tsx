@@ -30,6 +30,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   IconAlertTriangle,
+  IconBook,
   IconCheck,
   IconCloud,
   IconCloudCheck,
@@ -398,6 +399,21 @@ export default function Drafts() {
     }>
   >([]);
 
+  // Tavily research
+  const [researchOpened, { open: openResearch, close: closeResearch }] =
+    useDisclosure(false);
+  const [researchQuery, setResearchQuery] = useState('');
+  const [researchLoading, setResearchLoading] = useState(false);
+  const [researchResults, setResearchResults] = useState<
+    Array<{
+      title: string;
+      url: string;
+      snippet: string;
+      score: number;
+      published_date: string;
+    }>
+  >([]);
+
   // Publishing — Laravel autopost
   const [publishOpened, { open: openPublish, close: closePublish }] = useDisclosure(false);
   const [publishStage, setPublishStage] = useState<'preflight' | 'progress'>('preflight');
@@ -577,6 +593,47 @@ export default function Drafts() {
     notifications.show({
       color: 'teal',
       message: `Link "${suggestion.title}" disisipkan di akhir konten.`,
+    });
+  }
+
+  // ===== Tavily Research handlers =====
+
+  async function runResearch(q?: string) {
+    const query = (q ?? researchQuery).trim();
+    if (!query) {
+      notifications.show({ color: 'yellow', message: 'Ketik query dulu.' });
+      return;
+    }
+    setResearchLoading(true);
+    try {
+      const data = await apiPost<{
+        results: typeof researchResults;
+      }>('/research/search', { query, max_results: 6, depth: 'basic' });
+      setResearchResults(data.results);
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Research gagal',
+        message: e instanceof Error ? e.message : 'unknown',
+      });
+    } finally {
+      setResearchLoading(false);
+    }
+  }
+
+  function openResearchModal() {
+    // Pre-fill query dari title kalau kosong
+    if (!researchQuery && title) setResearchQuery(title);
+    openResearch();
+  }
+
+  function insertCitationToContent(item: (typeof researchResults)[number]) {
+    // Format: " [(source: Title)](url)" — disisip di akhir konten
+    const citation = ` [(${item.title.slice(0, 80)})](${item.url})`;
+    setContentMd(contentMd + citation);
+    notifications.show({
+      color: 'teal',
+      message: `Citation "${item.title.slice(0, 50)}..." disisipkan.`,
     });
   }
 
@@ -1615,6 +1672,15 @@ export default function Drafts() {
                         <Button
                           size="xs"
                           variant="light"
+                          color="cyan"
+                          leftSection={<IconBook size={14} />}
+                          onClick={openResearchModal}
+                        >
+                          Research (Tavily)
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="light"
                           color="orange"
                           leftSection={<IconShieldCheck size={14} />}
                           onClick={runPolicyCheck}
@@ -2098,6 +2164,115 @@ export default function Drafts() {
             <Text size="sm" c="dimmed" ta="center" py="md">
               Cari kata kunci → klik gambar untuk sisipkan markdown ke akhir konten.
             </Text>
+          )}
+        </Stack>
+      </Modal>
+
+      {/* Tavily Research Modal */}
+      <Modal
+        opened={researchOpened}
+        onClose={closeResearch}
+        title={
+          <Group gap="xs">
+            <IconBook size={18} />
+            <Text fw={600}>Web Research (Tavily)</Text>
+          </Group>
+        }
+        size="lg"
+        centered
+      >
+        <Stack gap="md">
+          <Group gap="xs" wrap="nowrap">
+            <TextInput
+              placeholder="Cari fakta / sumber referensi (default: judul artikel)"
+              value={researchQuery}
+              onChange={(e) => setResearchQuery(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  runResearch();
+                }
+              }}
+              style={{ flex: 1 }}
+              leftSection={<IconSearch size={14} />}
+            />
+            <Button
+              onClick={() => runResearch()}
+              loading={researchLoading}
+              leftSection={<IconSearch size={14} />}
+            >
+              Cari
+            </Button>
+          </Group>
+
+          <Alert color="cyan" variant="light" p="xs">
+            <Text size="xs">
+              💡 Hasil web search dari Tavily — pakai untuk validasi fakta sebelum
+              tulis, atau insert sebagai citation untuk naikin sinyal{' '}
+              <b>E-E-A-T</b>. Free tier: 1000 req/bulan.
+            </Text>
+          </Alert>
+
+          {researchResults.length === 0 && !researchLoading && (
+            <Text size="sm" c="dimmed" ta="center" py="md">
+              Belum ada hasil. Klik Cari untuk mulai.
+            </Text>
+          )}
+
+          {researchResults.length > 0 && (
+            <Stack gap="xs">
+              {researchResults.map((r, i) => (
+                <Card key={i} withBorder p="sm">
+                  <Group justify="space-between" wrap="nowrap" align="flex-start">
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Text size="sm" fw={500} lineClamp={2}>
+                        {r.title || '(no title)'}
+                      </Text>
+                      <Text size="xs" c="dimmed" mt={2}>
+                        {r.url}
+                      </Text>
+                      <Text size="xs" mt={4} lineClamp={3}>
+                        {r.snippet}
+                      </Text>
+                      <Group gap={4} mt={4}>
+                        {r.published_date && (
+                          <Badge size="xs" variant="light" color="gray">
+                            {r.published_date}
+                          </Badge>
+                        )}
+                        {r.score > 0 && (
+                          <Badge size="xs" variant="light" color="cyan">
+                            score {(r.score * 100).toFixed(0)}%
+                          </Badge>
+                        )}
+                      </Group>
+                    </div>
+                    <Stack gap={4}>
+                      <Tooltip label="Buka sumber">
+                        <ActionIcon
+                          variant="subtle"
+                          component="a"
+                          href={r.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <IconExternalLink size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Insert sebagai citation di akhir konten">
+                        <ActionIcon
+                          variant="light"
+                          color="cyan"
+                          onClick={() => insertCitationToContent(r)}
+                        >
+                          <IconLink size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Stack>
+                  </Group>
+                </Card>
+              ))}
+            </Stack>
           )}
         </Stack>
       </Modal>
